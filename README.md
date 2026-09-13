@@ -5,6 +5,37 @@ protobuf definitions.
 
 Architecture: [Gateway](https://github.com/agynio/architecture/blob/main/architecture/gateway.md)
 
+## Workload Removal Compatibility
+
+The proposed `Workload.removal_confirmed_at` contract requires regenerating the
+Gateway as well as Runners and the orchestrator. An older Gateway's protobuf
+client can receive an unknown field over gRPC but omit it when producing JSON.
+No handwritten forwarding change is needed for `ListWorkloadsByAgentInstance`.
+
+Until the [API contribution](https://github.com/spk-ai/api/tree/feat/workload-removal-confirmation)
+is published to BSR, generate from the sibling API checkout:
+
+```sh
+cd ../api
+buf generate . --template ../gateway/buf.gen.yaml --output ../gateway \
+  --include-imports --path proto/agynio/api/gateway/v1
+cd ../gateway
+go test -race ./...
+go build ./cmd/gateway
+```
+
+`TestWorkloadRemovalConfirmationSurvivesGRPCToGatewayJSON` exercises the actual
+gRPC client and Connect HTTP handler with a fake Runners backend. It checks that
+failed/stopped billing end does not become confirmation, explicit confirmation
+survives JSON serialization, and instance identity, pagination and downstream
+caller identity are preserved. It makes no model calls and does not replace
+deployed database, Kubernetes deletion, or authentication-boundary acceptance.
+
+The Apps, Groups, LLM and Networks test clients embed their generated interfaces,
+matching the existing Agents/Runners fakes, so the current API's additional
+internal RPCs do not prevent this suite from compiling. No production handler,
+permission or protocol implementation changes are included here.
+
 ## Local Development
 
 Full setup: [Local Development](https://github.com/agynio/architecture/blob/main/architecture/operations/local-development.md)
