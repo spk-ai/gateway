@@ -14,6 +14,7 @@ import (
 )
 
 type fakeGroupsClient struct {
+	groupsv1.GroupsServiceClient
 	createReq       *groupsv1.CreateGroupRequest
 	createMetadata  metadata.MD
 	createErr       error
