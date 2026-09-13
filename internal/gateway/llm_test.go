@@ -11,6 +11,7 @@ import (
 )
 
 type fakeLLMClient struct {
+	llmv1.LLMServiceClient
 	testModelReq  *llmv1.TestModelRequest
 	testModelResp *llmv1.TestModelResponse
 }

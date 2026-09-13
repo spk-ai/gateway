@@ -14,6 +14,7 @@ import (
 )
 
 type fakeNetworksClient struct {
+	networksv1.NetworksServiceClient
 	createNetworkReq      *networksv1.CreateNetworkRequest
 	createNetworkMetadata metadata.MD
 	createNetworkErr      error

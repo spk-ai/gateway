@@ -18,6 +18,7 @@ import (
 )
 
 type fakeAppsClient struct {
+	appsv1.AppsServiceClient
 	getApp                func(ctx context.Context, req *appsv1.GetAppRequest, opts ...grpc.CallOption) (*appsv1.GetAppResponse, error)
 	getInstallationBySlug func(ctx context.Context, req *appsv1.GetInstallationBySlugRequest, opts ...grpc.CallOption) (*appsv1.GetInstallationBySlugResponse, error)
 }
