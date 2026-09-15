@@ -137,7 +137,7 @@ func TestPreparedWorkloadSurvivesGRPCToGatewayJSON(t *testing.T) {
 	}
 }
 
-func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, method string, request, expected proto.Message) {
+func assertRunnersGatewayJSON(t *testing.T, backend runnersv1.RunnersServiceServer, method string, request, expected proto.Message) []byte {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -155,7 +155,7 @@ func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, metho
 		}
 		return handler(ctx, req)
 	}))
-	runnersv1.RegisterRunnersServiceServer(server, &preparedRunnersServer{workload: workload})
+	runnersv1.RegisterRunnersServiceServer(server, backend)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	t.Cleanup(func() {
@@ -200,8 +200,14 @@ func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, metho
 		t.Fatal(err)
 	}
 	if !proto.Equal(actual, expected) {
-		t.Fatalf("prepared lifecycle, ownership, binding or confirmation changed: %s", body)
+		t.Fatalf("resource lifecycle, ownership, binding or confirmation changed: %s", body)
 	}
+	return body
+}
+
+func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, method string, request, expected proto.Message) []byte {
+	t.Helper()
+	body := assertRunnersGatewayJSON(t, &preparedRunnersServer{workload: workload}, method, request, expected)
 	var raw struct {
 		Workload  json.RawMessage   `json:"workload"`
 		Workloads []json.RawMessage `json:"workloads"`
@@ -223,7 +229,7 @@ func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, metho
 		if _, present := fields["preparation"]; present {
 			t.Fatal("legacy workload acquired prepared lifecycle evidence")
 		}
-		return
+		return body
 	}
 	var preparation map[string]json.RawMessage
 	if err := json.Unmarshal(fields["preparation"], &preparation); err != nil {
@@ -240,4 +246,5 @@ func assertPreparedGatewayJSON(t *testing.T, workload *runnersv1.Workload, metho
 	if _, present := fields["removalConfirmedAt"]; present != (workload.RemovalConfirmedAt != nil) {
 		t.Fatal("billing end changed explicit removal-confirmation presence")
 	}
+	return body
 }

@@ -38,6 +38,46 @@ permission or protocol implementation changes are included here.
 
 ## Local Development
 
+### Resource Lifecycle Wire Compatibility
+
+The dependent `test/resource-lifecycle-forwarding` branch also covers native
+resource anchors, preparation revocation and anchored workspace retirement.
+Generate against API `23d3073` from `feat/preparation-revocation`; the public
+BSR schema does not yet include these proposals. A fresh checkout needs the
+internal identity/Ziti services as well as the public Gateway definitions:
+
+```sh
+cd ../api-preparation-revocation
+buf generate . --template ../gateway-resource-lifecycle/buf.gen.yaml \
+  --output ../gateway-resource-lifecycle --include-imports \
+  --path proto/agynio/api/gateway/v1 \
+  --path proto/agynio/api/ziti_management/v1 \
+  --path proto/agynio/api/identity/v1
+cd ../gateway-resource-lifecycle
+go test -race ./...
+go vet ./...
+go build ./...
+```
+
+On 2026-09-15 all 363 race test entries pass with no failures or skips; build
+and unfiltered vet pass. New tests cover both owner kinds over every applicable
+Get/List route, exact resource and workspace identities, original reservations,
+separate revocation proof/confirmation, mixed found/absent workspaces and a
+zero-volume case. JSON revisions above JavaScript's exact integer range remain
+decimal strings. Optional evidence stays absent until supplied by the backend.
+Request filters, pagination and one downstream caller identity are preserved.
+
+The shared real gRPC/Connect fixture uses synthetic backend records and resolved
+authentication. This is wire compatibility, not independent native cleanup,
+database validation, deployed authorization or A2A acceptance. No production
+forwarding handler or permission changes are needed; matching generated types
+are required when building an image. Generated files remain uncommitted.
+
+The first new fixture failed to compile due to a status-enum typo. The next
+whole-repository run exposed missing generated internal services; neither run
+counts as acceptance. The corrected clean-generation command above includes
+both services. Existing repository licensing is unchanged.
+
 Full setup: [Local Development](https://github.com/agynio/architecture/blob/main/architecture/operations/local-development.md)
 
 ### Prepare environment
