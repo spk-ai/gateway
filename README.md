@@ -1,7 +1,6 @@
 # Gateway
 
-Schema-first HTTP gateway built on Go 1.24.10 with ConnectRPC services generated from agynio/api
-protobuf definitions.
+Schema-first HTTP gateway for `agynio/api` protobuf services.
 
 See [AGENTS.md](AGENTS.md) for source owners and contribution rules, and
 [docs/catalog.json](docs/catalog.json) for operational and historical documents.
@@ -16,39 +15,36 @@ Architecture: [Gateway](https://github.com/agynio/architecture/blob/main/archite
 
 ## Workload Removal Compatibility
 
-The forwarding contract lives beside `RunnersGateway` in
-[runners.go](internal/gateway/runners.go), including optional evidence, decimal
-revisions, caller identity and public/internal boundaries.
-Coordinate matching generated API types across Gateway, Runners and orchestrator;
-no handwritten response projection is needed for these additive fields.
+See `RunnersGateway` in [runners.go](internal/gateway/runners.go) for the forwarding
+contract. Coordinate matching generated API types across Gateway, Runners and
+orchestrator.
 
-Until the [API contribution](https://github.com/spk-ai/api/tree/feat/workload-removal-confirmation)
-is published to BSR, generate from the sibling API checkout:
+Until the lifecycle proposals are published to BSR, generate from the sibling
+API checkout at the rebased dependency above. Include the internal services
+needed for a clean build; adjust sibling checkout names as needed:
 
 ```sh
 cd ../api
 buf generate . --template ../gateway/buf.gen.yaml --output ../gateway \
-  --include-imports --path proto/agynio/api/gateway/v1
+  --include-imports --path proto/agynio/api/gateway/v1 \
+  --path proto/agynio/api/ziti_management/v1 --path proto/agynio/api/identity/v1
 cd ../gateway
 go test -race ./...
 go build ./cmd/gateway
 ```
 
-`TestWorkloadRemovalConfirmationSurvivesGRPCToGatewayJSON` exercises the actual
-gRPC client and Connect HTTP handler with a fake Runners backend. It checks that
-failed/stopped billing end does not become confirmation, explicit confirmation
-survives JSON serialization, and instance identity, pagination and downstream
-caller identity are preserved. It makes no model calls and does not replace
-deployed database, Kubernetes deletion, or authentication-boundary acceptance.
-
-The Apps, Groups, LLM and Networks test clients embed their generated interfaces,
-matching the existing Agents/Runners fakes, so the current API's additional
-internal RPCs do not prevent this suite from compiling. No production handler,
-permission or protocol implementation changes are included here.
+The [removal fixture](internal/gateway/workload_removal_test.go) uses synthetic
+backend records and resolved identity. It does not replace deployed database,
+Kubernetes deletion or authentication-boundary acceptance. The original
+[API proposal](https://github.com/spk-ai/api/tree/feat/workload-removal-confirmation)
+is historical context, not the combined build dependency.
 
 ## Local Development
 
 ### Resource Lifecycle Wire Compatibility
+
+The following dependencies, reproduction command and results record historical
+acceptance, not verification of the rebased stack.
 
 The dependent `test/resource-lifecycle-forwarding` branch also covers native
 resource anchors, preparation revocation and anchored workspace retirement.
@@ -92,6 +88,10 @@ Full setup: [Local Development](https://github.com/agynio/architecture/blob/main
 
 ### Prepare environment
 
+Use the Go toolchain required by [go.mod](go.mod), Buf and DevSpace. Follow the
+linked bootstrap guide with an explicitly selected development cluster and
+permission to change platform deployments; these commands change cluster state.
+
 ```bash
 git clone https://github.com/agynio/bootstrap.git
 cd bootstrap
@@ -103,6 +103,11 @@ See [bootstrap](https://github.com/agynio/bootstrap) for details.
 
 ### Run from sources
 
+The executable workflow is [devspace.yaml](devspace.yaml), with
+[startup](scripts/devspace-startup.sh) and [ArgoCD restoration](scripts/argocd-restore.sh)
+scripts. Its published-schema generation is not a substitute for the matching
+local API required by this contribution stack.
+
 ```bash
 # Deploy once (exit when healthy)
 devspace dev
@@ -113,13 +118,8 @@ devspace dev -w
 
 ## Adding a New API Domain
 
-Every API domain in the gateway must be defined in protobuf and exposed via
-ConnectRPC. The standard flow mirrors the existing gateway handlers:
-
-1. Add or update the protobuf definition in `agynio/api` and include the path
-   in `buf.gen.yaml` and CI `buf generate` commands.
-2. Regenerate stubs with `buf generate` and implement forwarding handlers in
-   `internal/gateway/<domain>.go` that satisfy the generated Connect handler
-   interfaces.
-3. Wire the new handler in `cmd/gateway/main.go` using the Connect mux and
-   interceptors.
+Define public domains in `agynio/api` protobuf and coordinate schema publication
+with Gateway builds; do not introduce Gateway-only request/response contracts.
+Keep [generation configuration](buf.gen.yaml) and [CI inputs](.github/workflows/ci.yml)
+aligned with that schema. Use [existing handlers](internal/gateway/) and
+[registration](cmd/gateway/main.go) for implementation patterns.

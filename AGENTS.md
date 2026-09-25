@@ -1,19 +1,18 @@
 # Gateway Contribution Guide
 
 ## Owners
-- `internal/gateway/runners.go`: generated-message forwarding for lifecycle reads.
-- `internal/gateway/{workload_removal,prepared_workload,resource_lifecycle}_test.go`:
-  real loopback gRPC-to-Connect JSON compatibility fixtures.
-- The API owns field semantics; the Gateway must not infer cleanup evidence or
-  expose internal lifecycle mutation RPCs as a side effect of read compatibility.
+Start with the [forwarding contract](internal/gateway/runners.go) and its linked
+fixtures. The API owns field semantics; the Gateway must not infer cleanup
+evidence or expose internal lifecycle mutation RPCs as a side effect of read
+compatibility.
 
 ## Documentation
 - Keep implementation invariants beside their handwritten Go or protobuf owner.
   Update those comments and focused tests when behavior changes; Markdown holds
   operations, cross-repository decisions, security boundaries and dated evidence.
-- Start at `docs/catalog.json`. Maintain its version-1 document entries
-  (`id`, `path`, `title`, `purpose`, `kind`) for meaningful Markdown and
-  `AGENTS.md` only, using repository-relative paths. Do not index generated code.
+- Start at `docs/catalog.json`; update it when a guide's path or purpose changes.
+  Keep meaningful Markdown and `AGENTS.md` discoverable using repository-relative
+  paths. Do not index generated code.
 - When a compatible structural navigator is available, discover repositories and
   components first, then batch-inspect selected owners and their related tests.
   Otherwise use native declarations, imports, RPC types and adjacent tests;

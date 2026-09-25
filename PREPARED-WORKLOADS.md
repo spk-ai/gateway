@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 # Prepared Workload Forwarding
 
-This dependent test branch verifies the existing Gateway read routes against
-the proposed prepared-workload API. The active forwarding contract lives beside
-`RunnersGateway` in [runners.go](internal/gateway/runners.go).
+This guide records historical prepared-workload forwarding acceptance. Use
+[README.md](README.md) for the rebased build dependency. The active contract lives
+beside `RunnersGateway` in [runners.go](internal/gateway/runners.go).
 Coordinate matching API generation when building the Gateway; this contribution
 adds no public mutation route or authorization policy.
 
@@ -38,15 +38,8 @@ exclusions or skips. Build and vet pass. The new prepared test contributes 93
 entries and 70 actual HTTP requests through generated Connect handlers and a
 loopback gRPC connection.
 
-Coverage includes both agent-instance and sandbox ownership, all lifecycle
-phases, unknown preparation during removal, unused-reservation abort and legacy
-records. `GetWorkload`, `ListWorkloads`, `ListWorkloadsByThread` and, for agent
-owners, `ListWorkloadsByAgentInstance` preserve complete protobuf responses.
-Checks include request identity/filter/pagination, exactly-once identity metadata
-forwarding, Pod/PVC/backend bindings, volume ownership labels, explicit absence
-observations, and confirmation distinct from billing end. Revision
-`9007199254740993` remains an exact JSON decimal string. Absent evidence is not
-manufactured for legacy or unbound records.
+The route/state matrix and JSON assertions are maintained in
+[prepared_workload_test.go](internal/gateway/prepared_workload_test.go).
 
 The backend responses and resolved HTTP identity are fixtures. This is a wire
 compatibility check, not database persistence, public authentication, Ziti
