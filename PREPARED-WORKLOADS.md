@@ -2,9 +2,10 @@
 # Prepared Workload Forwarding
 
 This dependent test branch verifies the existing Gateway read routes against
-the proposed prepared-workload API. It changes no production handler, public
-mutation route or authorization policy. Generate the matching API when building
-the Gateway; old generated messages silently discard fields they do not know.
+the proposed prepared-workload API. The active forwarding contract lives beside
+`RunnersGateway` in [runners.go](internal/gateway/runners.go).
+Coordinate matching API generation when building the Gateway; this contribution
+adds no public mutation route or authorization policy.
 
 ## Dependencies
 

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "readme",
+      "path": "README.md",
+      "title": "Gateway",
+      "purpose": "Repository entry point, development setup and integration context.",
+      "kind": "navigation"
+    },
+    {
+      "id": "agents",
+      "path": "AGENTS.md",
+      "title": "Gateway Contribution Guide",
+      "purpose": "Source ownership, living documentation and verification rules.",
+      "kind": "contribution"
+    },
+    {
+      "id": "prepared-forwarding",
+      "path": "PREPARED-WORKLOADS.md",
+      "title": "Prepared Workload Forwarding",
+      "purpose": "Matching-schema build prerequisites and historical wire acceptance scope.",
+      "kind": "verification"
+    }
+  ]
+}

@@ -3,6 +3,9 @@
 Schema-first HTTP gateway built on Go 1.24.10 with ConnectRPC services generated from agynio/api
 protobuf definitions.
 
+See [AGENTS.md](AGENTS.md) for source owners and contribution rules, and
+[docs/catalog.json](docs/catalog.json) for operational and historical documents.
+
 The `sync/2026-09-24-resource-lifecycle` branch rebases the forwarding acceptance
 stack onto upstream `0ee317b`. Generate its clients from `spk-ai/api` `c21440b`
 on `sync/2026-09-24-volume-adoption`, including imports and the internal identity
@@ -13,10 +16,11 @@ Architecture: [Gateway](https://github.com/agynio/architecture/blob/main/archite
 
 ## Workload Removal Compatibility
 
-The proposed `Workload.removal_confirmed_at` contract requires regenerating the
-Gateway as well as Runners and the orchestrator. An older Gateway's protobuf
-client can receive an unknown field over gRPC but omit it when producing JSON.
-No handwritten forwarding change is needed for `ListWorkloadsByAgentInstance`.
+The forwarding contract lives beside `RunnersGateway` in
+[runners.go](internal/gateway/runners.go), including optional evidence, decimal
+revisions, caller identity and public/internal boundaries.
+Coordinate matching generated API types across Gateway, Runners and orchestrator;
+no handwritten response projection is needed for these additive fields.
 
 Until the [API contribution](https://github.com/spk-ai/api/tree/feat/workload-removal-confirmation)
 is published to BSR, generate from the sibling API checkout:

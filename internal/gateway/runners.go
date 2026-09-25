@@ -11,6 +11,19 @@ import (
 	"google.golang.org/grpc"
 )
 
+// RunnersGateway forwards generated lifecycle messages without synthesizing or
+// projecting evidence. Reads retain optional confirmation, bindings, anchors and
+// separate revocation/retirement receipts; removed_at is billing only. Connect
+// protobuf JSON preserves uint64 revisions as decimal strings even above 2^53.
+// Matching generated types are required: unknown gRPC fields on an older build
+// do not survive JSON serialization. Preserve filters/pagination and forward
+// identity through downstreamContext once per call. Lifecycle mutation RPCs stay
+// internal; read compatibility adds no public mutation or cleanup authority.
+// @see api::proto/agynio/api/runners/v1/runners
+// @see runners::internal/server/workloads
+// @see internal/gateway/workload_removal_test.go
+// @see internal/gateway/prepared_workload_test.go
+// @see internal/gateway/resource_lifecycle_test.go
 type RunnersGateway struct {
 	runners runnersClient
 }
