@@ -249,23 +249,28 @@ func main() {
 		ConnContext: connContext,
 	}
 
+	var zitiMgr *zitimanager.Manager
+	var readiness zitiReadiness
 	if config.ZitiEnabled {
 		serviceName := zitiServiceName()
-		listenerFactory := func(zitiCtx ziti.Context) (net.Listener, error) {
-			return zitiCtx.ListenWithOptions(serviceName, ziti.DefaultListenOptions())
+		listenerFactory := func(zitiCtx ziti.Context, options *ziti.ListenOptions) (net.Listener, error) {
+			return zitiCtx.ListenWithOptions(serviceName, options)
 		}
 
 		var zitiListenerMu sync.Mutex
 		var zitiListener net.Listener
-		onNewListener := func(listener net.Listener) {
+		onNewListener := func(listener net.Listener, established uint) {
 			zitiListenerMu.Lock()
 			oldListener := zitiListener
 			zitiListener = listener
 			zitiListenerMu.Unlock()
-			log.Printf("gateway listening on ziti service %s", serviceName)
+			// Logged only after a router confirmed a terminator; E2E waits for it.
+			log.Printf("gateway listening on ziti service %s (established listeners: %d)", serviceName, established)
 			go func() {
+				// Replaced or lost listeners end here; the manager's watchdog
+				// re-enrolls, so this must not exit the process.
 				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Fatalf("ziti server stopped: %v", err)
+					log.Printf("ziti listener for service %s stopped: %v", serviceName, err)
 				}
 			}()
 			if oldListener != nil {
@@ -276,11 +281,11 @@ func main() {
 		}
 
 		mgr, err := zitimanager.New(
-			ctx,
 			zitiMgmtClient,
 			zitimgmtv1.ServiceType_SERVICE_TYPE_GATEWAY,
 			config.ZitiEnrollmentTimeout,
 			config.ZitiLeaseRenewalInterval,
+			config.ZitiBindTimeout,
 			listenerFactory,
 			onNewListener,
 		)
@@ -299,7 +304,22 @@ func main() {
 		}
 		mux.Handle("/apps/", appProxyHandler)
 
-		go mgr.RunLeaseRenewal(ctx)
+		zitiMgr = mgr
+		readiness = mgr
+	}
+	mux.Handle(readyzPath, newReadyzHandler(readiness))
+
+	if zitiMgr != nil {
+		// The TCP server starts without waiting for Ziti so liveness and /readyz
+		// answer while binding; failing to (re-)establish the listener exits.
+		go func() {
+			if err := zitiMgr.Start(ctx); err != nil {
+				log.Fatalf("failed to establish ziti service listener: %v", err)
+			}
+			if err := zitiMgr.Run(ctx); err != nil {
+				log.Fatalf("lost ziti service listener: %v", err)
+			}
+		}()
 	}
 
 	log.Printf("gateway listening on %s", addr)

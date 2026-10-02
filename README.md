@@ -112,6 +112,20 @@ devspace dev
 devspace dev -w
 ```
 
+## Ziti Readiness
+
+`/readyz` is unauthenticated and returns 200 only when Ziti is disabled or the
+gateway service has a router-confirmed terminator. Use it for readiness, not
+liveness: the TCP server starts before enrollment, and a bind may take up to
+`ZITI_BIND_TIMEOUT` (default `90s`). A gateway that cannot establish or regain a
+terminator within `ZITI_ENROLLMENT_TIMEOUT` exits non-zero.
+
+`ZITI_SERVICE_IDENTITY_LEASE_TTL` (default `5m`) must equal ziti-management's
+`SERVICE_IDENTITY_LEASE_TTL`. Startup rejects settings where the bind timeout,
+`ZITI_LEASE_RENEWAL_INTERVAL` and a 30s margin do not fit within that lease.
+The [manager](internal/zitimanager/manager.go) and
+[configuration](internal/platform/config.go) own the details.
+
 ## Adding a New API Domain
 
 Define public domains in `agynio/api` protobuf and coordinate schema publication

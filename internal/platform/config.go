@@ -25,6 +25,8 @@ const (
 	defaultZitiManagementGRPCTarget = "ziti-management:50051"
 	defaultZitiLeaseRenewalInterval = 2 * time.Minute
 	defaultZitiEnrollmentTimeout    = 2 * time.Minute
+	defaultZitiBindTimeout          = 90 * time.Second
+	defaultZitiIdentityLeaseTTL     = 5 * time.Minute
 	defaultUsersGRPCTarget          = "users:50051"
 	defaultOIDCProfileSource        = "userinfo"
 	defaultOrganizationsGRPCTarget  = "organizations:50051"
@@ -54,6 +56,10 @@ type Config struct {
 	ZitiEnabled              bool
 	ZitiLeaseRenewalInterval time.Duration
 	ZitiEnrollmentTimeout    time.Duration
+	ZitiBindTimeout          time.Duration
+	// ZitiIdentityLeaseTTL must equal ziti-management's SERVICE_IDENTITY_LEASE_TTL
+	// (default 5m); it is only used to validate the lease budget.
+	ZitiIdentityLeaseTTL     time.Duration
 	ZitiManagementGRPCTarget string
 	OIDCIssuerURL            string
 	OIDCClientID             string
@@ -97,6 +103,28 @@ func LoadConfigFromEnv() (*Config, error) {
 		return nil, fmt.Errorf("ZITI_ENROLLMENT_TIMEOUT must be positive")
 	}
 
+	zitiBindTimeout, err := envDuration("ZITI_BIND_TIMEOUT", defaultZitiBindTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if zitiBindTimeout <= 0 {
+		return nil, fmt.Errorf("ZITI_BIND_TIMEOUT must be positive")
+	}
+	if zitiEnrollmentTimeout < zitiBindTimeout {
+		return nil, fmt.Errorf("ZITI_ENROLLMENT_TIMEOUT (%s) must be at least ZITI_BIND_TIMEOUT (%s)", zitiEnrollmentTimeout, zitiBindTimeout)
+	}
+
+	zitiIdentityLeaseTTL, err := envDuration("ZITI_SERVICE_IDENTITY_LEASE_TTL", defaultZitiIdentityLeaseTTL)
+	if err != nil {
+		return nil, err
+	}
+	if zitiIdentityLeaseTTL <= 0 {
+		return nil, fmt.Errorf("ZITI_SERVICE_IDENTITY_LEASE_TTL must be positive")
+	}
+	if err := validateZitiLeaseBudget(zitiBindTimeout, zitiLeaseRenewalInterval, zitiIdentityLeaseTTL); err != nil {
+		return nil, err
+	}
+
 	// Where provisioning-time profile claims come from. Defaults to the UserInfo
 	// endpoint; "token" reads them from the access token, which is required for
 	// IdPs that issue audience-restricted tokens (UserInfo rejects any token
@@ -132,6 +160,8 @@ func LoadConfigFromEnv() (*Config, error) {
 		ZitiEnabled:              zitiEnabled,
 		ZitiLeaseRenewalInterval: zitiLeaseRenewalInterval,
 		ZitiEnrollmentTimeout:    zitiEnrollmentTimeout,
+		ZitiBindTimeout:          zitiBindTimeout,
+		ZitiIdentityLeaseTTL:     zitiIdentityLeaseTTL,
 		ZitiManagementGRPCTarget: envOrDefault("ZITI_MANAGEMENT_GRPC_TARGET", defaultZitiManagementGRPCTarget),
 		OIDCIssuerURL:            strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
 		OIDCClientID:             strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
@@ -151,6 +181,25 @@ func LoadConfigFromEnv() (*Config, error) {
 		GroupsGRPCTarget:         envOrDefault("GROUPS_GRPC_TARGET", defaultGroupsGRPCTarget),
 		NetworksGRPCTarget:       envOrDefault("NETWORKS_GRPC_TARGET", defaultNetworksGRPCTarget),
 	}, nil
+}
+
+// zitiLeaseSafetyMargin covers lease extension retries, RPC latency and clock
+// skew between the gateway and ziti-management.
+const zitiLeaseSafetyMargin = 30 * time.Second
+
+// validateZitiLeaseBudget keeps a newly issued service identity leased until its
+// first extension. ziti-management starts the lease when it issues the
+// identity; the gateway extends it once a terminator is established, at most
+// ZITI_BIND_TIMEOUT later, and if that extension fails transiently the next
+// attempt is up to ZITI_LEASE_RENEWAL_INTERVAL after it.
+func validateZitiLeaseBudget(bindTimeout, renewalInterval, leaseTTL time.Duration) error {
+	if bindTimeout+renewalInterval+zitiLeaseSafetyMargin >= leaseTTL {
+		return fmt.Errorf(
+			"ZITI_BIND_TIMEOUT (%s) + ZITI_LEASE_RENEWAL_INTERVAL (%s) + %s safety margin must be less than ZITI_SERVICE_IDENTITY_LEASE_TTL (%s)",
+			bindTimeout, renewalInterval, zitiLeaseSafetyMargin, leaseTTL,
+		)
+	}
+	return nil
 }
 
 func envOrDefault(name, fallback string) string {
