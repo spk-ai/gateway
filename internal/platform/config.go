@@ -110,9 +110,6 @@ func LoadConfigFromEnv() (*Config, error) {
 	if zitiBindTimeout <= 0 {
 		return nil, fmt.Errorf("ZITI_BIND_TIMEOUT must be positive")
 	}
-	if zitiEnrollmentTimeout < zitiBindTimeout {
-		return nil, fmt.Errorf("ZITI_ENROLLMENT_TIMEOUT (%s) must be at least ZITI_BIND_TIMEOUT (%s)", zitiEnrollmentTimeout, zitiBindTimeout)
-	}
 
 	zitiIdentityLeaseTTL, err := envDuration("ZITI_SERVICE_IDENTITY_LEASE_TTL", defaultZitiIdentityLeaseTTL)
 	if err != nil {
@@ -121,8 +118,10 @@ func LoadConfigFromEnv() (*Config, error) {
 	if zitiIdentityLeaseTTL <= 0 {
 		return nil, fmt.Errorf("ZITI_SERVICE_IDENTITY_LEASE_TTL must be positive")
 	}
-	if err := validateZitiLeaseBudget(zitiBindTimeout, zitiLeaseRenewalInterval, zitiIdentityLeaseTTL); err != nil {
-		return nil, err
+	if zitiEnabled {
+		if err := validateZitiTimeouts(zitiEnrollmentTimeout, zitiBindTimeout, zitiLeaseRenewalInterval, zitiIdentityLeaseTTL); err != nil {
+			return nil, err
+		}
 	}
 
 	// Where provisioning-time profile claims come from. Defaults to the UserInfo
@@ -183,16 +182,25 @@ func LoadConfigFromEnv() (*Config, error) {
 	}, nil
 }
 
-// zitiLeaseSafetyMargin covers lease extension retries, RPC latency and clock
-// skew between the gateway and ziti-management.
+// zitiLeaseSafetyMargin covers the extension calls themselves (the manager
+// bounds each attempt), RPC latency and clock skew between the gateway and
+// ziti-management.
 const zitiLeaseSafetyMargin = 30 * time.Second
 
-// validateZitiLeaseBudget keeps a newly issued service identity leased until its
-// first extension. ziti-management starts the lease when it issues the
-// identity; the gateway extends it once a terminator is established, at most
-// ZITI_BIND_TIMEOUT later, and if that extension fails transiently the next
-// attempt is up to ZITI_LEASE_RENEWAL_INTERVAL after it.
-func validateZitiLeaseBudget(bindTimeout, renewalInterval, leaseTTL time.Duration) error {
+// validateZitiTimeouts relates the Ziti timeouts to each other and to
+// ziti-management's lease. It applies only when Ziti is enabled; the
+// individual values are validated regardless.
+//
+// One enrollment attempt must fit a whole bind. The lease budget keeps a newly
+// issued service identity leased until its first extension: ziti-management
+// starts the lease when it issues the identity; the gateway extends it once a
+// terminator is established, at most ZITI_BIND_TIMEOUT later, and if that
+// extension fails transiently the next attempt is up to
+// ZITI_LEASE_RENEWAL_INTERVAL after it.
+func validateZitiTimeouts(enrollmentTimeout, bindTimeout, renewalInterval, leaseTTL time.Duration) error {
+	if enrollmentTimeout < bindTimeout {
+		return fmt.Errorf("ZITI_ENROLLMENT_TIMEOUT (%s) must be at least ZITI_BIND_TIMEOUT (%s)", enrollmentTimeout, bindTimeout)
+	}
 	if bindTimeout+renewalInterval+zitiLeaseSafetyMargin >= leaseTTL {
 		return fmt.Errorf(
 			"ZITI_BIND_TIMEOUT (%s) + ZITI_LEASE_RENEWAL_INTERVAL (%s) + %s safety margin must be less than ZITI_SERVICE_IDENTITY_LEASE_TTL (%s)",

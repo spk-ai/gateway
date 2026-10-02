@@ -12,9 +12,11 @@ type zitiReadiness interface {
 	EstablishedListeners() uint
 }
 
-// newReadyzHandler serves unauthenticated readiness: ready when Ziti is disabled
-// (nil probe) or at least one terminator is established. Liveness must not use
-// it: binding can legitimately take up to ZITI_BIND_TIMEOUT, and the TCP server
+// newReadyzHandler serves unauthenticated Ziti-listener readiness: ready when
+// Ziti is disabled (nil probe) or at least one terminator is established. It
+// must not gate the TCP Service: the TCP API does not need Ziti, and a router
+// restart would remove every replica at once. Liveness must not use it either:
+// binding can legitimately take up to ZITI_BIND_TIMEOUT, and the TCP server
 // starts before enrollment.
 func newReadyzHandler(probe zitiReadiness) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

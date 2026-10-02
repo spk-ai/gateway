@@ -311,14 +311,15 @@ func main() {
 
 	if zitiMgr != nil {
 		// The TCP server starts without waiting for Ziti so liveness and /readyz
-		// answer while binding; failing to (re-)establish the listener exits.
+		// answer while binding. Startup fails closed: no terminator within the
+		// enrollment timeout exits. After that Run retries re-enrollment
+		// indefinitely, so a Ziti outage leaves the TCP API serving while
+		// /readyz reports 503.
 		go func() {
 			if err := zitiMgr.Start(ctx); err != nil {
 				log.Fatalf("failed to establish ziti service listener: %v", err)
 			}
-			if err := zitiMgr.Run(ctx); err != nil {
-				log.Fatalf("lost ziti service listener: %v", err)
-			}
+			zitiMgr.Run(ctx)
 		}()
 	}
 

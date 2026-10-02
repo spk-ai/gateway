@@ -399,6 +399,7 @@ func TestLoadConfigFromEnvZitiBindTimeoutValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ZITI_ENABLED", "true")
 			t.Setenv("ZITI_BIND_TIMEOUT", tt.bindTimeout)
 			t.Setenv("ZITI_ENROLLMENT_TIMEOUT", tt.enrollmentTimeout)
 			t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", tt.renewalInterval)
@@ -412,6 +413,51 @@ func TestLoadConfigFromEnvZitiBindTimeoutValidation(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigFromEnvZitiDisabledSkipsTimeoutRelations(t *testing.T) {
+	tests := []struct {
+		name              string
+		zitiEnabled       string
+		bindTimeout       string
+		enrollmentTimeout string
+		renewalInterval   string
+		leaseTTL          string
+		wantErr           bool
+	}{
+		{name: "enrollment shorter than bind", bindTimeout: "60s", enrollmentTimeout: "59s"},
+		{name: "bind beyond the lease", bindTimeout: "3m", enrollmentTimeout: "5m"},
+		{name: "renewal interval consuming the margin", renewalInterval: "3m"},
+		{name: "lease shorter than the budget", zitiEnabled: "false", leaseTTL: "3m"},
+		{name: "zero bind timeout still rejected", bindTimeout: "0s", wantErr: true},
+		{name: "invalid lease still rejected", zitiEnabled: "false", leaseTTL: "forever", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ZITI_ENABLED", tt.zitiEnabled)
+			t.Setenv("ZITI_BIND_TIMEOUT", tt.bindTimeout)
+			t.Setenv("ZITI_ENROLLMENT_TIMEOUT", tt.enrollmentTimeout)
+			t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", tt.renewalInterval)
+			t.Setenv("ZITI_SERVICE_IDENTITY_LEASE_TTL", tt.leaseTTL)
+			t.Setenv("CLUSTER_ADMIN_TOKEN", "")
+			t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "")
+
+			cfg, err := LoadConfigFromEnv()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected configuration to be rejected")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected disabled ziti to skip timeout relations: %v", err)
+			}
+			if cfg.ZitiEnabled {
+				t.Fatalf("expected ziti to be disabled")
 			}
 		})
 	}

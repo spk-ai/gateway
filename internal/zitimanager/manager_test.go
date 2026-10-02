@@ -225,6 +225,7 @@ func newManagerFixture(t *testing.T) *managerFixture {
 
 	setLeaseRetryBackoffs(t, []time.Duration{time.Millisecond})
 	setReEnrollBackoffs(t, []time.Duration{5 * time.Millisecond})
+	setReEnrollRoundBackoffs(t, []time.Duration{10 * time.Millisecond})
 
 	return f
 }
@@ -321,6 +322,12 @@ func (f *managerFixture) requests() []time.Time {
 	return append([]time.Time(nil), f.requestTimes...)
 }
 
+func (f *managerFixture) extendCount(identityID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.extendCalls[identityID]
+}
+
 func (f *managerFixture) eventLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -387,6 +394,38 @@ func setReEnrollBackoffs(t *testing.T, backoffs []time.Duration) {
 	})
 }
 
+func setReEnrollRoundBackoffs(t *testing.T, backoffs []time.Duration) {
+	t.Helper()
+
+	original := reEnrollRoundBackoffs
+	reEnrollRoundBackoffs = backoffs
+	t.Cleanup(func() {
+		reEnrollRoundBackoffs = original
+	})
+}
+
+func setLeaseExtendAttemptTimeout(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	original := leaseExtendAttemptTimeout
+	leaseExtendAttemptTimeout = timeout
+	t.Cleanup(func() {
+		leaseExtendAttemptTimeout = original
+	})
+}
+
+// blockUntilCleanup returns a channel that is closed when the test ends, before
+// the fake server stops, so handlers can simulate a hung ziti-management.
+func blockUntilCleanup(t *testing.T) <-chan struct{} {
+	t.Helper()
+
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+	})
+	return release
+}
+
 func setWatchdogInterval(t *testing.T, interval time.Duration) {
 	t.Helper()
 
@@ -449,27 +488,28 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 }
 
 // runManager runs mgr in the background; the returned stop cancels it and
-// returns Run's result.
-func runManager(t *testing.T, mgr *Manager) func() error {
+// fails the test unless Run returns promptly.
+func runManager(t *testing.T, mgr *Manager) func() {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		done <- mgr.Run(ctx)
+		defer close(done)
+		mgr.Run(ctx)
 	}()
 	var once sync.Once
-	var runErr error
-	stop := func() error {
+	stop := func() {
 		once.Do(func() {
 			cancel()
-			runErr = <-done
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Errorf("expected run to return after cancellation")
+			}
 		})
-		return runErr
 	}
-	t.Cleanup(func() {
-		_ = stop()
-	})
+	t.Cleanup(stop)
 	return stop
 }
 
@@ -743,6 +783,30 @@ func TestManagerStartReenrollsWhenPostBindExtensionNotFound(t *testing.T) {
 	}
 }
 
+func TestManagerStartHandsOffWhenPostBindExtensionTimesOut(t *testing.T) {
+	setLeaseExtendAttemptTimeout(t, 50*time.Millisecond)
+	f := newManagerFixture(t)
+	hung := blockUntilCleanup(t)
+	f.extendErr = func(string, int) error {
+		<-hung
+		return nil
+	}
+	mgr := f.newManager(time.Second, time.Hour, time.Second)
+
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("expected a timed-out extension to be left to renewal: %v", err)
+	}
+	if got := f.awaitNewListener("initial listener"); got != net.Listener(f.listener(1)) {
+		t.Fatalf("expected the established listener to be handed off")
+	}
+	if got := len(f.requests()); got != 1 {
+		t.Fatalf("expected a single enrollment, got %d", got)
+	}
+	if mgr.identity() != "identity-1" || mgr.EstablishedListeners() != 1 {
+		t.Fatalf("expected manager to keep the established identity")
+	}
+}
+
 func TestRunWatchdogReenrollsAfterLosingTerminators(t *testing.T) {
 	setWatchdogInterval(t, 5*time.Millisecond)
 	f := newManagerFixture(t)
@@ -780,9 +844,7 @@ func TestRunWatchdogReenrollsAfterLosingTerminators(t *testing.T) {
 		t.Fatalf("expected manager to store the new ziti context")
 	}
 
-	if err := stop(); err != nil {
-		t.Fatalf("expected run to stop cleanly: %v", err)
-	}
+	stop()
 }
 
 func TestRunWatchdogToleratesRecoveryWithinBindTimeout(t *testing.T) {
@@ -809,44 +871,166 @@ func TestRunWatchdogToleratesRecoveryWithinBindTimeout(t *testing.T) {
 	}
 }
 
-func TestRunFailsClosedWhenReenrollmentFails(t *testing.T) {
+func TestRunKeepsReenrollingAfterFailedRounds(t *testing.T) {
+	setWatchdogInterval(t, 5*time.Millisecond)
+	output := captureLog(t)
 	f := newManagerFixture(t)
-	f.requestErr = func(call int) error {
-		if call > 1 {
-			return status.Error(codes.PermissionDenied, "denied")
+	setReEnrollRoundBackoffs(t, []time.Duration{25 * time.Millisecond})
+	var outage atomic.Bool
+	// Identities are still issued during the outage, but no router accepts
+	// their binds, so every failed attempt abandons one identity.
+	f.bind = func(_ int, listener *fakeListener, _ *ziti.ListenOptions) (net.Listener, error) {
+		if outage.Load() {
+			_ = listener.Close()
+			return nil, errors.New("no edge router accepted the bind")
 		}
-		return nil
+		listener.established.Store(1)
+		return listener, nil
 	}
-	f.extendErr = func(_ string, call int) error {
-		if call > 1 {
-			return status.Error(codes.NotFound, "missing")
-		}
-		return nil
-	}
-	mgr := f.newManager(100*time.Millisecond, 10*time.Millisecond, 50*time.Millisecond)
+	mgr := f.newManager(30*time.Millisecond, time.Hour, 10*time.Millisecond)
 
 	if err := mgr.Start(context.Background()); err != nil {
 		t.Fatalf("failed to start manager: %v", err)
 	}
 	f.awaitNewListener("initial listener")
+	stop := runManager(t, mgr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := mgr.Run(ctx); err == nil {
-		t.Fatalf("expected run to fail when re-enrollment cannot complete")
+	outage.Store(true)
+	f.listener(1).established.Store(0)
+	waitFor(t, "three failed re-enrollment rounds", func() bool {
+		return strings.Contains(output.String(), "ziti re-enrollment round 3 failed")
+	})
+
+	if mgr.EstablishedListeners() != 0 || mgr.ZitiContext() != nil || mgr.identity() != "" {
+		t.Fatalf("expected manager to report not ready while re-enrollment fails")
 	}
-	if ctx.Err() != nil {
-		t.Fatalf("expected run to fail within the enrollment timeout")
+	f.expectNoNewListener()
+	requests := f.requests()
+	roundPauses := 0
+	for i := 2; i < len(requests); i++ {
+		if requests[i].Sub(requests[i-1]) >= 25*time.Millisecond {
+			roundPauses++
+		}
+	}
+	if roundPauses < 2 {
+		t.Fatalf("expected failed rounds to back off, got %d pauses in %d requests", roundPauses, len(requests))
+	}
+	for i, zitiCtx := range f.allContexts() {
+		if !zitiCtx.Closed() {
+			t.Fatalf("expected ziti context %d to be closed", i+1)
+		}
+	}
+	// Abandoned identities are never extended, so their leases expire.
+	if events := f.eventLog(); strings.Join(events, ",") != "extend:identity-1,listener:1" {
+		t.Fatalf("expected only the first identity to be extended, got %v", events)
 	}
 
-	if got := len(f.requests()); got < 2 {
-		t.Fatalf("expected re-enrollment attempts, got %d enrollments", got)
+	outage.Store(false)
+	got := f.awaitNewListener("listener after the outage")
+	listeners := f.allListeners()
+	if got != net.Listener(listeners[len(listeners)-1]) {
+		t.Fatalf("expected the latest listener to be handed off")
 	}
-	if !f.listener(1).Closed() || !f.context(1).Closed() {
-		t.Fatalf("expected the lost identity's listener and context to be closed")
+	waitFor(t, "manager to report ready after the outage", func() bool {
+		return mgr.EstablishedListeners() == 1
+	})
+	identityID := mgr.identity()
+	if identityID == "" || identityID == "identity-1" {
+		t.Fatalf("expected a replacement identity, got %q", identityID)
 	}
-	if mgr.ZitiContext() != nil || mgr.EstablishedListeners() != 0 {
-		t.Fatalf("expected manager state to be cleared")
+	want := []string{"extend:identity-1", "listener:1", "extend:" + identityID, fmt.Sprintf("listener:%d", len(listeners))}
+	if events := f.eventLog(); strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected only established identities to be extended, got %v", events)
+	}
+	stop()
+}
+
+func TestRunWatchdogNotBlockedByHungLeaseRenewal(t *testing.T) {
+	setWatchdogInterval(t, 5*time.Millisecond)
+	f := newManagerFixture(t)
+	hung := blockUntilCleanup(t)
+	f.extendErr = func(identityID string, call int) error {
+		if identityID == "identity-1" && call > 1 {
+			<-hung
+		}
+		return nil
+	}
+	mgr := f.newManager(time.Second, 10*time.Millisecond, 50*time.Millisecond)
+
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("failed to start manager: %v", err)
+	}
+	f.awaitNewListener("initial listener")
+	stop := runManager(t, mgr)
+	waitFor(t, "lease renewal to hang", func() bool {
+		return f.extendCount("identity-1") >= 2
+	})
+
+	lostAt := time.Now()
+	f.listener(1).established.Store(0)
+
+	if got := f.awaitNewListener("re-enrolled listener"); got != net.Listener(f.listener(2)) {
+		t.Fatalf("expected the re-enrolled listener to be handed off")
+	}
+	requests := f.requests()
+	if len(requests) != 2 {
+		t.Fatalf("expected one re-enrollment, got %d enrollments", len(requests))
+	}
+	if delay := requests[1].Sub(lostAt); delay < 50*time.Millisecond {
+		t.Fatalf("expected re-enrollment only after the bind timeout, got %s", delay)
+	}
+	if got := f.extendCount("identity-1"); got != 2 {
+		t.Fatalf("expected the hung renewal to stay in flight, got %d extensions", got)
+	}
+	// Cancellation also ends the hung extension attempt.
+	stop()
+}
+
+func TestRunIgnoresLeaseLossOfReplacedIdentity(t *testing.T) {
+	setWatchdogInterval(t, 5*time.Millisecond)
+	f := newManagerFixture(t)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseRenewal := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	t.Cleanup(releaseRenewal)
+	f.extendErr = func(identityID string, call int) error {
+		if identityID == "identity-1" && call > 1 {
+			<-release
+			return status.Error(codes.NotFound, "identity lease expired")
+		}
+		return nil
+	}
+	mgr := f.newManager(time.Second, 10*time.Millisecond, 50*time.Millisecond)
+
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("failed to start manager: %v", err)
+	}
+	f.awaitNewListener("initial listener")
+	runManager(t, mgr)
+	waitFor(t, "lease renewal to be in flight", func() bool {
+		return f.extendCount("identity-1") >= 2
+	})
+
+	f.listener(1).established.Store(0)
+	if got := f.awaitNewListener("re-enrolled listener"); got != net.Listener(f.listener(2)) {
+		t.Fatalf("expected the re-enrolled listener to be handed off")
+	}
+
+	// The NotFound for identity-1 now reaches Run after identity-2 replaced it.
+	releaseRenewal()
+	waitFor(t, "renewal of the replacement identity", func() bool {
+		return f.extendCount("identity-2") >= 3
+	})
+	if got := len(f.requests()); got != 2 {
+		t.Fatalf("expected a stale lease loss not to re-enroll, got %d enrollments", got)
+	}
+	f.expectNoNewListener()
+	if mgr.identity() != "identity-2" || mgr.EstablishedListeners() != 1 {
+		t.Fatalf("expected the replacement identity to stay active")
 	}
 }
 
@@ -937,6 +1121,33 @@ func TestExtendLeaseWithRetryRetriesTransientErrors(t *testing.T) {
 	}
 	if got := len(f.eventLog()); got != 3 {
 		t.Fatalf("expected 3 extend attempts, got %d", got)
+	}
+}
+
+func TestExtendLeaseWithRetryBoundsHungAttempt(t *testing.T) {
+	setLeaseExtendAttemptTimeout(t, 50*time.Millisecond)
+	f := newManagerFixture(t)
+	hung := blockUntilCleanup(t)
+	f.extendErr = func(string, int) error {
+		<-hung
+		return nil
+	}
+	mgr := f.newManager(time.Second, time.Second, time.Second)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- mgr.extendLeaseWithRetry(context.Background(), "identity-1")
+	}()
+	select {
+	case err := <-result:
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("expected deadline exceeded, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected a hung lease extension to be bounded")
+	}
+	if got := f.extendCount("identity-1"); got != 1 {
+		t.Fatalf("expected a timed-out attempt not to be retried, got %d attempts", got)
 	}
 }
 

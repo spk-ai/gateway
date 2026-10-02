@@ -29,7 +29,13 @@ const (
 
 var (
 	leaseRetryBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-	reEnrollBackoffs   = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	// leaseExtendAttemptTimeout bounds each ExtendIdentityLease call; the
+	// management client sets no deadline of its own.
+	leaseExtendAttemptTimeout = 10 * time.Second
+	reEnrollBackoffs          = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	// reEnrollRoundBackoffs space failed runtime re-enrollment rounds; the last
+	// entry repeats.
+	reEnrollRoundBackoffs = []time.Duration{10 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
 	// watchdogInterval is how often Run samples the established terminator count.
 	watchdogInterval = 5 * time.Second
 	// bindErrorLogInterval throttles child bind errors: the SDK retries a rejected
@@ -46,7 +52,9 @@ var (
 type ListenerFactory func(zitiCtx ziti.Context, options *ziti.ListenOptions) (net.Listener, error)
 
 // OnNewListener receives a listener only after at least one terminator is
-// established and the identity lease has been extended.
+// established and an extension of its identity's lease was attempted. NotFound
+// or an expired context rejects the bind instead; other extension errors are
+// logged and left to lease renewal.
 type OnNewListener func(listener net.Listener, established uint)
 
 // EstablishedCounter is implemented by SDK multi-listeners. A listener that
@@ -145,49 +153,37 @@ func (m *Manager) Start(ctx context.Context) error {
 	return m.enroll(ctx)
 }
 
-// Run renews the identity lease and re-enrolls when the lease is gone or the
-// listener has had no established terminator for longer than the bind timeout.
-// It returns an error, with state cleared, when re-enrollment fails within the
-// enrollment timeout, and nil when ctx ends.
-func (m *Manager) Run(ctx context.Context) error {
-	renewal := time.NewTicker(m.renewalInterval)
-	defer renewal.Stop()
+// Run keeps the identity leased and the listener established until ctx ends.
+// Lease renewal runs in its own goroutine, so a slow ziti-management cannot
+// delay the watchdog. The manager re-enrolls when ziti-management no longer
+// knows the current identity or the listener has had no established terminator
+// for longer than the bind timeout, and keeps retrying until a listener is
+// established: losing Ziti after startup reports not ready but never stops the
+// gateway's TCP API.
+func (m *Manager) Run(ctx context.Context) {
+	leaseLost := make(chan string)
+	renewalDone := make(chan struct{})
+	go func() {
+		defer close(renewalDone)
+		m.renewLease(ctx, leaseLost)
+	}()
+	defer func() { <-renewalDone }()
+
 	watchdog := time.NewTicker(watchdogInterval)
 	defer watchdog.Stop()
 
 	var unestablishedSince time.Time
-	reEnroll := func(reason string) error {
-		log.Printf("re-enrolling ziti identity: %s", reason)
-		if err := m.enroll(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("failed to re-enroll ziti identity: %w", err)
-		}
-		unestablishedSince = time.Time{}
-		renewal.Reset(m.renewalInterval)
-		return nil
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-renewal.C:
-			err := m.extendLeaseWithRetry(ctx, m.identity())
-			if err == nil {
+			return
+		case identityID := <-leaseLost:
+			// Ignore losses of identities that were already replaced.
+			if identityID != m.identity() {
 				continue
 			}
-			if ctx.Err() != nil {
-				return nil
-			}
-			if errors.Is(err, errIdentityMissing) || status.Code(err) == codes.NotFound {
-				if err := reEnroll(fmt.Sprintf("lease not found: %v", err)); err != nil {
-					return err
-				}
-				continue
-			}
-			log.Printf("failed to extend ziti lease: %v", err)
+			m.reEnroll(ctx, fmt.Sprintf("lease of identity %s not found", identityID))
+			unestablishedSince = time.Time{}
 		case <-watchdog.C:
 			if m.EstablishedListeners() > 0 {
 				unestablishedSince = time.Time{}
@@ -199,10 +195,64 @@ func (m *Manager) Run(ctx context.Context) error {
 				continue
 			}
 			if elapsed := time.Since(unestablishedSince); elapsed >= m.bindTimeout {
-				if err := reEnroll(fmt.Sprintf("no established terminators for %s", elapsed.Round(time.Millisecond))); err != nil {
-					return err
-				}
+				m.reEnroll(ctx, fmt.Sprintf("no established terminators for %s", elapsed.Round(time.Millisecond)))
+				unestablishedSince = time.Time{}
 			}
+		}
+	}
+}
+
+// renewLease extends the current identity's lease every renewal interval and
+// sends the identity on lost when ziti-management reports it NotFound. Without
+// an identity there is nothing to extend: an enrollment is in progress or the
+// watchdog will start one.
+func (m *Manager) renewLease(ctx context.Context, lost chan<- string) {
+	ticker := time.NewTicker(m.renewalInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		identityID := m.identity()
+		if identityID == "" {
+			continue
+		}
+		err := m.extendLeaseWithRetry(ctx, identityID)
+		switch {
+		case err == nil || ctx.Err() != nil:
+		case status.Code(err) == codes.NotFound:
+			select {
+			case lost <- identityID:
+			case <-ctx.Done():
+				return
+			}
+		default:
+			log.Printf("failed to extend ziti lease, retrying at the next renewal: %v", err)
+		}
+	}
+}
+
+// reEnroll replaces the current identity, retrying until a listener is
+// established or ctx ends. Each round is one enroll, bounded by the enrollment
+// timeout; failed rounds back off along reEnrollRoundBackoffs. A failed attempt
+// abandons at most one identity whose lease was never extended, which
+// ziti-management expires after its lease TTL.
+func (m *Manager) reEnroll(ctx context.Context, reason string) {
+	log.Printf("re-enrolling ziti identity: %s", reason)
+	for round := 1; ; round++ {
+		err := m.enroll(ctx)
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+
+		delay := backoffDelay(reEnrollRoundBackoffs, round)
+		log.Printf("ziti re-enrollment round %d failed, staying not ready and retrying in %s: %v", round, delay, err)
+		if sleepWithContext(ctx, delay) != nil {
+			return
 		}
 	}
 }
@@ -225,7 +275,7 @@ func (m *Manager) enroll(ctx context.Context) error {
 			return fmt.Errorf("ziti service listener not established within %s: %w", m.enrollTimeout, err)
 		}
 
-		delay := reEnrollDelay(attempt)
+		delay := backoffDelay(reEnrollBackoffs, attempt)
 		log.Printf("ziti enrollment attempt %d failed, retrying in %s: %v", attempt, delay, err)
 		if sleepWithContext(enrollmentCtx, delay) != nil {
 			return fmt.Errorf("ziti service listener not established within %s: %w", m.enrollTimeout, err)
@@ -236,7 +286,7 @@ func (m *Manager) enroll(ctx context.Context) error {
 // enrollOnce requests a fresh identity and binds it. ziti-management starts the
 // identity's lease on issue, so the lease is extended as soon as a terminator is
 // established; NotFound means the identity is already gone and fails the
-// attempt. Other extension errors are left to Run's renewal ticker, which the
+// attempt. Other extension errors are left to Run's lease renewal, which the
 // configuration bounds to fire before the lease expires.
 func (m *Manager) enrollOnce(ctx context.Context) error {
 	var identityID string
@@ -305,6 +355,10 @@ func (m *Manager) enrollOnce(ctx context.Context) error {
 func (m *Manager) listen(ctx context.Context, zitiCtx ziti.Context) (net.Listener, error) {
 	options := ziti.DefaultListenOptions()
 	options.WaitForNEstablishedListeners = requiredEstablishedListeners
+	// In SDK v1.6.0 ConnectTimeout is the WaitForN deadline and also the
+	// MaxElapsedTime of the listener's bind-session (createSessionWithBackoff)
+	// and re-authentication (EnsureAuthenticated) backoffs, here and on later
+	// session refreshes. Router bind replies keep a fixed 5s timeout.
 	options.ConnectTimeout = m.bindTimeout
 
 	type result struct {
@@ -373,15 +427,12 @@ func (m *Manager) extendLeaseWithRetry(ctx context.Context, identityID string) e
 				return err
 			}
 		}
-		lastErr = m.mgmtClient.ExtendIdentityLease(ctx, identityID)
+		lastErr = m.extendLease(ctx, identityID)
 		if lastErr == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-		if status.Code(lastErr) == codes.NotFound {
-			return lastErr
 		}
 		if !isRetryableGrpcError(lastErr) {
 			return lastErr
@@ -389,6 +440,16 @@ func (m *Manager) extendLeaseWithRetry(ctx context.Context, identityID string) e
 	}
 
 	return lastErr
+}
+
+// extendLease makes one ExtendIdentityLease attempt bounded by
+// leaseExtendAttemptTimeout. The resulting DeadlineExceeded is not retryable: a
+// hung ziti-management is unlikely to answer the next attempt, and the next
+// renewal tick tries again.
+func (m *Manager) extendLease(ctx context.Context, identityID string) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, leaseExtendAttemptTimeout)
+	defer cancel()
+	return m.mgmtClient.ExtendIdentityLease(attemptCtx, identityID)
 }
 
 func (m *Manager) identity() string {
@@ -430,15 +491,17 @@ func (l *bindErrorLogger) log(err error) {
 	l.suppressed = 0
 }
 
-func reEnrollDelay(attempt int) time.Duration {
-	if attempt <= 0 || len(reEnrollBackoffs) == 0 {
+// backoffDelay returns the delay after the given 1-based attempt; the last
+// entry repeats.
+func backoffDelay(backoffs []time.Duration, attempt int) time.Duration {
+	if attempt <= 0 || len(backoffs) == 0 {
 		return 0
 	}
 	idx := attempt - 1
-	if idx >= len(reEnrollBackoffs) {
-		idx = len(reEnrollBackoffs) - 1
+	if idx >= len(backoffs) {
+		idx = len(backoffs) - 1
 	}
-	return reEnrollBackoffs[idx]
+	return backoffs[idx]
 }
 
 func retryWithBackoff(ctx context.Context, operationName string, fn func(context.Context) error) error {
