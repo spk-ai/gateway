@@ -64,6 +64,11 @@ jobs:
           kubectl logs -n agyn-platform deployment/gateway --all-containers --tail=-1 | grep -E 'ziti|bind|listening' | tail -50 || true
           exit 1
 
+      # Runners calls carry the projected caller token (RUNNERS_TOKEN_FILE);
+      # the gateway refuses to start if it is unreadable.
+      - name: Verify runners caller token is mounted
+        run: kubectl exec -n agyn-platform deployment/gateway -- test -s /var/run/secrets/agyn.io/runners-token/token
+
       - name: Run E2E tests
         uses: ./.e2e-tooling/.github/actions/run-tests
         env:

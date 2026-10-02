@@ -20,6 +20,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("USERS_GRPC_TARGET", "users:50060")
 	t.Setenv("ORGANIZATIONS_GRPC_TARGET", "organizations:50062")
 	t.Setenv("RUNNERS_GRPC_TARGET", "runners:50063")
+	t.Setenv("RUNNERS_TOKEN_FILE", " /var/run/secrets/agyn.io/runners-token/token ")
 	t.Setenv("TERMINAL_PROXY_GRPC_TARGET", "terminal-proxy:50070")
 	t.Setenv("EXPOSE_GRPC_TARGET", "expose:50065")
 	t.Setenv("EGRESS_RULES_GRPC_TARGET", "egress-rules:50066")
@@ -95,6 +96,9 @@ func TestLoadConfigFromEnv(t *testing.T) {
 
 	if got := cfg.RunnersGRPCTarget; got != "runners:50063" {
 		t.Fatalf("unexpected runners grpc target: %s", got)
+	}
+	if got := cfg.RunnersTokenFile; got != "/var/run/secrets/agyn.io/runners-token/token" {
+		t.Fatalf("unexpected runners token file: %s", got)
 	}
 
 	if got := cfg.TerminalProxyGRPCTarget; got != "terminal-proxy:50070" {
@@ -187,6 +191,7 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 	t.Setenv("USERS_GRPC_TARGET", "")
 	t.Setenv("ORGANIZATIONS_GRPC_TARGET", "")
 	t.Setenv("RUNNERS_GRPC_TARGET", "")
+	t.Setenv("RUNNERS_TOKEN_FILE", "")
 	t.Setenv("TERMINAL_PROXY_GRPC_TARGET", "")
 	t.Setenv("EXPOSE_GRPC_TARGET", "")
 	t.Setenv("EGRESS_RULES_GRPC_TARGET", "")
@@ -249,6 +254,9 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 	}
 	if cfg.RunnersGRPCTarget != defaultRunnersGRPCTarget {
 		t.Fatalf("unexpected runners grpc target: %s", cfg.RunnersGRPCTarget)
+	}
+	if cfg.RunnersTokenFile != "" {
+		t.Fatalf("runners token file must default to empty, got %s", cfg.RunnersTokenFile)
 	}
 	if cfg.TerminalProxyGRPCTarget != defaultTerminalProxyGRPCTarget {
 		t.Fatalf("unexpected terminal proxy grpc target: %s", cfg.TerminalProxyGRPCTarget)

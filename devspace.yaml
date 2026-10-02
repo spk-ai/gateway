@@ -39,6 +39,15 @@ pipelines:
             volumes:
               - name: data
                 emptyDir: {}
+              # The chart's runnersCallerToken volume: Runners calls carry this
+              # projected token, so the source build exercises the same path.
+              - name: runners-caller-token
+                projected:
+                  sources:
+                    - serviceAccountToken:
+                        audience: agyn-runners
+                        expirationSeconds: 600
+                        path: token
             containers:
               - name: gateway
                 image: ghcr.io/agynio/devcontainer-go:1.1.0
@@ -67,9 +76,15 @@ pipelines:
                       [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout waiting for source files" >&2; exit 1; }
                     done
                     exec /opt/app/data/scripts/devspace-startup.sh
+                env:
+                  - name: RUNNERS_TOKEN_FILE
+                    value: /var/run/secrets/agyn.io/runners-token/token
                 volumeMounts:
                   - name: data
                     mountPath: /opt/app/data
+                  - name: runners-caller-token
+                    mountPath: /var/run/secrets/agyn.io/runners-token
+                    readOnly: true
                 livenessProbe: null
                 startupProbe: null
                 resources:
