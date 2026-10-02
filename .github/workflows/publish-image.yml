@@ -124,6 +124,8 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ steps.target.outputs.ref }}
+          # actions/attest signs the provenance; keep event payloads out of the image.
+          provenance: mode=min
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
