@@ -6,10 +6,11 @@ See [AGENTS.md](AGENTS.md) for source owners and contribution rules, and
 [docs/catalog.json](docs/catalog.json) for operational and historical documents.
 
 The `sync/2026-09-24-resource-lifecycle` branch rebases the forwarding acceptance
-stack onto upstream `0ee317b`. Generate its clients from `spk-ai/api` `c21440b`
-on `sync/2026-09-24-volume-adoption`, including imports and the internal identity
-and Ziti APIs. The earlier dependency revisions below are historical records;
-the published BSR module still lacks these lifecycle proposals.
+stack onto upstream `0ee317b`. [buf.gen.yaml](buf.gen.yaml) pins client generation
+for CI, DevSpace and the image to `spk-ai/api` `ce64da8` on `docs/living-contracts`
+(a descendant of the earlier `c21440b`), including imports and the internal
+identity and Ziti APIs. The earlier dependency revisions below are historical
+records; the published BSR module still lacks these lifecycle proposals.
 
 Architecture: [Gateway](https://github.com/agynio/architecture/blob/main/architecture/gateway.md)
 
@@ -19,16 +20,11 @@ See `RunnersGateway` in [runners.go](internal/gateway/runners.go) for the forwar
 contract. Coordinate matching generated API types across Gateway, Runners and
 orchestrator.
 
-Until the lifecycle proposals are published to BSR, generate from the sibling
-API checkout at the rebased dependency above. Include the internal services
-needed for a clean build; adjust sibling checkout names as needed:
+Until the lifecycle proposals are published to BSR, generate from the pinned
+API dependency above. Buf fetches that exact revision:
 
 ```sh
-cd ../api
-buf generate . --template ../gateway/buf.gen.yaml --output ../gateway \
-  --include-imports --path proto/agynio/api/gateway/v1 \
-  --path proto/agynio/api/ziti_management/v1 --path proto/agynio/api/identity/v1
-cd ../gateway
+buf generate --include-imports
 go test -race ./...
 go build ./cmd/gateway
 ```

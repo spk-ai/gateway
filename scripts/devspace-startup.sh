@@ -4,7 +4,7 @@ set -eu
 echo "=== DevSpace startup ==="
 
 echo "Generating protobuf types..."
-buf generate buf.build/agynio/api
+buf generate --include-imports
 
 echo "Downloading Go modules..."
 go mod download

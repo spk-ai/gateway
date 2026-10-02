@@ -24,31 +24,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 COPY buf.gen.yaml buf.yaml ./
 
-# Generate protobuf stubs
-RUN buf generate buf.build/agynio/api \
-      --include-imports \
-      --path agynio/api/agents/v1 \
-      --path agynio/api/apps/v1 \
-      --path agynio/api/threads/v1 \
-      --path agynio/api/chat/v1 \
-      --path agynio/api/notifications/v1 \
-      --path agynio/api/files/v1 \
-      --path agynio/api/agent_state/v1 \
-      --path agynio/api/token_counting/v1 \
-      --path agynio/api/metering/v1 \
-      --path agynio/api/llm/v1 \
-      --path agynio/api/identity/v1 \
-      --path agynio/api/tracing/v1 \
-      --path agynio/api/users/v1 \
-      --path agynio/api/organizations/v1 \
-      --path agynio/api/runners/v1 \
-      --path agynio/api/expose/v1 \
-      --path agynio/api/egress/v1 \
-      --path agynio/api/terminal_proxy/v1 \
-      --path agynio/api/ziti_management/v1 \
-      --path agynio/api/images/v1 \
-      --path agynio/api/secrets/v1 \
-      --path agynio/api/gateway/v1
+# buf.gen.yaml pins the reviewed spk-ai/api revision and generated packages.
+RUN buf generate --include-imports
 
 COPY . .
 
