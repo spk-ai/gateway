@@ -147,6 +147,10 @@ type managerFixture struct {
 	bindOptions  []*ziti.ListenOptions
 	listeners    []*fakeListener
 	established  []uint
+	// readyAtHandoff is the manager's EstablishedListeners() seen inside
+	// onNewListener.
+	readyAtHandoff []uint
+	mgr            *Manager
 }
 
 func newManagerFixture(t *testing.T) *managerFixture {
@@ -251,6 +255,9 @@ func (f *managerFixture) onNewListener(listener net.Listener, established uint) 
 	}
 	f.events = append(f.events, fmt.Sprintf("listener:%d", index))
 	f.established = append(f.established, established)
+	if f.mgr != nil {
+		f.readyAtHandoff = append(f.readyAtHandoff, f.mgr.EstablishedListeners())
+	}
 	f.mu.Unlock()
 	f.newListenerCh <- listener
 }
@@ -270,6 +277,9 @@ func (f *managerFixture) newManager(enrollTimeout, renewalInterval, bindTimeout 
 	if err != nil {
 		f.t.Fatalf("failed to create manager: %v", err)
 	}
+	f.mu.Lock()
+	f.mgr = mgr
+	f.mu.Unlock()
 	return mgr
 }
 
@@ -508,6 +518,9 @@ func TestManagerStartEnrollsAndCreatesListener(t *testing.T) {
 	}
 	if f.established[0] != 1 {
 		t.Fatalf("expected callback to report 1 established listener, got %d", f.established[0])
+	}
+	if f.readyAtHandoff[0] != 1 {
+		t.Fatalf("expected manager to report ready during hand-off, got %d", f.readyAtHandoff[0])
 	}
 	if mgr.ZitiContext() != ziti.Context(f.context(1)) {
 		t.Fatalf("expected ziti context to be stored")

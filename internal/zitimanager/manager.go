@@ -287,13 +287,15 @@ func (m *Manager) enrollOnce(ctx context.Context) error {
 		source.SetErrorEventHandler((&bindErrorLogger{}).log)
 	}
 
-	m.onNewListener(listener, established)
-
+	// Publish state before the hand-off so readiness and ZitiContext already
+	// agree with the "listening" line the callback logs.
 	m.mu.Lock()
 	m.zitiCtx = zitiCtx
 	m.listener = listener
 	m.identityID = identityID
 	m.mu.Unlock()
+
+	m.onNewListener(listener, established)
 
 	return nil
 }
