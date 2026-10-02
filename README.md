@@ -112,6 +112,37 @@ devspace dev
 devspace dev -w
 ```
 
+## Ziti Readiness
+
+`/readyz` reports Ziti-listener readiness only. It is unauthenticated and
+returns 200 when Ziti is disabled or the gateway service has a router-confirmed
+terminator, otherwise 503. The TCP Service (Connect API, OIDC and API tokens)
+does not depend on Ziti, so `/readyz` must not be its Kubernetes
+`readinessProbe`: a router restart would remove every replica at once. It is
+not a liveness check either: the TCP server starts before enrollment, and a bind
+may take up to `ZITI_BIND_TIMEOUT` (default `90s`).
+
+Decision (2026-10-02): keep the `/readyz` path, which orchestrator E2E already
+polls, rather than renaming it to `/readyz/ziti`, and use it only for Ziti
+checks such as E2E waits and alerts. The chart keeps `readinessProbe` disabled.
+
+Startup fails closed: the process exits non-zero when no terminator is
+established within `ZITI_ENROLLMENT_TIMEOUT` (default `2m`). After startup the
+gateway stays up when Ziti is lost. It re-enrolls once the listener has had no
+terminator for `ZITI_BIND_TIMEOUT`, sampled every 5s, or once ziti-management
+reports the lease gone. A round lasts at most `ZITI_ENROLLMENT_TIMEOUT`, so
+after terminators are lost Ziti is regained, or a failed round is logged, within
+about bind timeout + 5s + enrollment timeout. Failed rounds are retried
+indefinitely with backoff capped at 2m while `/readyz` returns 503. Identities
+from failed attempts are never extended and expire with their lease.
+
+`ZITI_SERVICE_IDENTITY_LEASE_TTL` (default `5m`) must equal ziti-management's
+`SERVICE_IDENTITY_LEASE_TTL`. With `ZITI_ENABLED=true`, startup rejects settings
+where `ZITI_ENROLLMENT_TIMEOUT` is shorter than the bind timeout, or where the
+bind timeout, `ZITI_LEASE_RENEWAL_INTERVAL` and a 30s margin do not fit within
+that lease. The [manager](internal/zitimanager/manager.go) and
+[configuration](internal/platform/config.go) own the details.
+
 ## Adding a New API Domain
 
 Define public domains in `agynio/api` protobuf and coordinate schema publication

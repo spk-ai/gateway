@@ -28,6 +28,8 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("ZITI_ENABLED", "true")
 	t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", "3m")
 	t.Setenv("ZITI_ENROLLMENT_TIMEOUT", "90s")
+	t.Setenv("ZITI_BIND_TIMEOUT", "45s")
+	t.Setenv("ZITI_SERVICE_IDENTITY_LEASE_TTL", "6m")
 	t.Setenv("ZITI_MANAGEMENT_GRPC_TARGET", "ziti-management:50061")
 	t.Setenv("OIDC_ISSUER_URL", "https://issuer.example.com")
 	t.Setenv("OIDC_CLIENT_ID", "client-123")
@@ -127,6 +129,14 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		t.Fatalf("unexpected ziti enrollment timeout: %s", got)
 	}
 
+	if got := cfg.ZitiBindTimeout; got != 45*time.Second {
+		t.Fatalf("unexpected ziti bind timeout: %s", got)
+	}
+
+	if got := cfg.ZitiIdentityLeaseTTL; got != 6*time.Minute {
+		t.Fatalf("unexpected ziti identity lease ttl: %s", got)
+	}
+
 	if got := cfg.ZitiManagementGRPCTarget; got != "ziti-management:50061" {
 		t.Fatalf("unexpected ziti management grpc target: %s", got)
 	}
@@ -185,6 +195,8 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 	t.Setenv("ZITI_ENABLED", "")
 	t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", "")
 	t.Setenv("ZITI_ENROLLMENT_TIMEOUT", "")
+	t.Setenv("ZITI_BIND_TIMEOUT", "")
+	t.Setenv("ZITI_SERVICE_IDENTITY_LEASE_TTL", "")
 	t.Setenv("ZITI_MANAGEMENT_GRPC_TARGET", "")
 	t.Setenv("OIDC_ISSUER_URL", "")
 	t.Setenv("OIDC_CLIENT_ID", "")
@@ -261,6 +273,12 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 	}
 	if cfg.ZitiEnrollmentTimeout != defaultZitiEnrollmentTimeout {
 		t.Fatalf("unexpected ziti enrollment timeout: %s", cfg.ZitiEnrollmentTimeout)
+	}
+	if cfg.ZitiBindTimeout != 90*time.Second {
+		t.Fatalf("unexpected ziti bind timeout: %s", cfg.ZitiBindTimeout)
+	}
+	if cfg.ZitiIdentityLeaseTTL != 5*time.Minute {
+		t.Fatalf("unexpected ziti identity lease ttl: %s", cfg.ZitiIdentityLeaseTTL)
 	}
 	if cfg.ZitiManagementGRPCTarget != defaultZitiManagementGRPCTarget {
 		t.Fatalf("unexpected ziti management grpc target: %s", cfg.ZitiManagementGRPCTarget)
@@ -352,5 +370,95 @@ func TestLoadConfigFromEnvInvalidZitiEnrollmentTimeout(t *testing.T) {
 	_, err := LoadConfigFromEnv()
 	if err == nil {
 		t.Fatalf("expected error for invalid ziti enrollment timeout")
+	}
+}
+
+func TestLoadConfigFromEnvZitiBindTimeoutValidation(t *testing.T) {
+	tests := []struct {
+		name              string
+		bindTimeout       string
+		enrollmentTimeout string
+		renewalInterval   string
+		leaseTTL          string
+		wantErr           bool
+	}{
+		{name: "defaults fit the lease", wantErr: false},
+		{name: "largest bind timeout within the lease", bindTimeout: "149s", enrollmentTimeout: "5m", wantErr: false},
+		{name: "bind timeout reaching the lease budget", bindTimeout: "150s", enrollmentTimeout: "5m", wantErr: true},
+		{name: "bind timeout beyond the lease", bindTimeout: "3m", enrollmentTimeout: "5m", wantErr: true},
+		{name: "renewal interval consuming the margin", renewalInterval: "3m", wantErr: true},
+		{name: "lease shorter than ziti-management default", leaseTTL: "3m", wantErr: true},
+		{name: "longer lease admits longer bind", bindTimeout: "3m", enrollmentTimeout: "5m", leaseTTL: "10m", wantErr: false},
+		{name: "enrollment shorter than bind", bindTimeout: "60s", enrollmentTimeout: "59s", wantErr: true},
+		{name: "zero bind timeout", bindTimeout: "0s", wantErr: true},
+		{name: "negative bind timeout", bindTimeout: "-1s", wantErr: true},
+		{name: "invalid bind timeout", bindTimeout: "soon", wantErr: true},
+		{name: "zero lease", leaseTTL: "0s", wantErr: true},
+		{name: "invalid lease", leaseTTL: "forever", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ZITI_ENABLED", "true")
+			t.Setenv("ZITI_BIND_TIMEOUT", tt.bindTimeout)
+			t.Setenv("ZITI_ENROLLMENT_TIMEOUT", tt.enrollmentTimeout)
+			t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", tt.renewalInterval)
+			t.Setenv("ZITI_SERVICE_IDENTITY_LEASE_TTL", tt.leaseTTL)
+			t.Setenv("CLUSTER_ADMIN_TOKEN", "")
+			t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "")
+
+			_, err := LoadConfigFromEnv()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected configuration to be rejected")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigFromEnvZitiDisabledSkipsTimeoutRelations(t *testing.T) {
+	tests := []struct {
+		name              string
+		zitiEnabled       string
+		bindTimeout       string
+		enrollmentTimeout string
+		renewalInterval   string
+		leaseTTL          string
+		wantErr           bool
+	}{
+		{name: "enrollment shorter than bind", bindTimeout: "60s", enrollmentTimeout: "59s"},
+		{name: "bind beyond the lease", bindTimeout: "3m", enrollmentTimeout: "5m"},
+		{name: "renewal interval consuming the margin", renewalInterval: "3m"},
+		{name: "lease shorter than the budget", zitiEnabled: "false", leaseTTL: "3m"},
+		{name: "zero bind timeout still rejected", bindTimeout: "0s", wantErr: true},
+		{name: "invalid lease still rejected", zitiEnabled: "false", leaseTTL: "forever", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ZITI_ENABLED", tt.zitiEnabled)
+			t.Setenv("ZITI_BIND_TIMEOUT", tt.bindTimeout)
+			t.Setenv("ZITI_ENROLLMENT_TIMEOUT", tt.enrollmentTimeout)
+			t.Setenv("ZITI_LEASE_RENEWAL_INTERVAL", tt.renewalInterval)
+			t.Setenv("ZITI_SERVICE_IDENTITY_LEASE_TTL", tt.leaseTTL)
+			t.Setenv("CLUSTER_ADMIN_TOKEN", "")
+			t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "")
+
+			cfg, err := LoadConfigFromEnv()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected configuration to be rejected")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected disabled ziti to skip timeout relations: %v", err)
+			}
+			if cfg.ZitiEnabled {
+				t.Fatalf("expected ziti to be disabled")
+			}
+		})
 	}
 }

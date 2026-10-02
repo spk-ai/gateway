@@ -19,6 +19,14 @@ pipelines:
       else
         echo "WARNING: ArgoCD Application 'gateway' not found in argocd namespace."
       fi
+      # Two pods holding the service identity race to re-enroll and leave the
+      # overlay with an identity neither owns, so the old pod goes first.
+      label_selector="app.kubernetes.io/name=gateway"
+      echo "Scaling gateway down before source patch..."
+      kubectl scale deployment/gateway -n ${GATEWAY_NAMESPACE} --replicas=0
+      if [ -n "$(kubectl get pods -n ${GATEWAY_NAMESPACE} -l "${label_selector}" -o name)" ]; then
+        kubectl wait --for=delete pod -n ${GATEWAY_NAMESPACE} -l "${label_selector}" --timeout=240s
+      fi
       echo "Patching gateway deployment for DevSpace..."
       kubectl patch deployment gateway -n ${GATEWAY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
       spec:
@@ -87,6 +95,9 @@ pipelines:
                     type: RuntimeDefault
       EOF
       )"
+      kubectl patch deployment gateway -n ${GATEWAY_NAMESPACE} --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+      kubectl scale deployment/gateway -n ${GATEWAY_NAMESPACE} --replicas=1
+      kubectl rollout status deployment/gateway -n ${GATEWAY_NAMESPACE} --timeout=240s
       if [ "$(get_flag "watch")" == "true" ]; then
         trap './scripts/argocd-restore.sh' EXIT
         start_dev --disable-pod-replace gateway
