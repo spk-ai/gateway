@@ -164,6 +164,15 @@ gateway:
   usersGrpcTarget: "users:50051"
   organizationsGrpcTarget: "organizations:50051"
   runnersGrpcTarget: "runners:50051"
+  # Projected ServiceAccount token attached to Runners calls only (metadata
+  # x-agyn-caller-token). Runners validates it with a TokenReview against this
+  # audience and authorizes the gateway ServiceAccount. Kubelet rotates it; the
+  # gateway re-reads it when the file changes.
+  runnersCallerToken:
+    enabled: true
+    audience: agyn-runners
+    expirationSeconds: 600
+    mountPath: /var/run/secrets/agyn.io/runners-token
   exposeGrpcTarget: "expose:50051"
   egressRulesGrpcTarget: "egress-rules:50051"
   groupsGrpcTarget: "groups:50051"

@@ -138,7 +138,17 @@ func main() {
 	chatClient := mustClient(config.ChatGRPCTarget, "chat", chatv1.NewChatServiceClient, &cleanup)
 	notificationsClient := mustClient(config.NotificationsGRPCTarget, "notifications", notificationsv1.NewNotificationsServiceClient, &cleanup)
 	organizationsClient := mustClient(config.OrganizationsGRPCTarget, "organizations", organizationsv1.NewOrganizationsServiceClient, &cleanup)
-	runnersClient := mustClient(config.RunnersGRPCTarget, "runners", runnersv1.NewRunnersServiceClient, &cleanup)
+	// Only the Runners connection carries this process's projected
+	// ServiceAccount token; Runners authorizes callers with a TokenReview.
+	var runnersOptions []grpcclient.Option
+	if config.RunnersTokenFile != "" {
+		tokenOption, err := grpcclient.WithCallerTokenFile(config.RunnersTokenFile)
+		if err != nil {
+			log.Fatalf("failed to load runners caller token: %v", err)
+		}
+		runnersOptions = append(runnersOptions, tokenOption)
+	}
+	runnersClient := mustClient(config.RunnersGRPCTarget, "runners", runnersv1.NewRunnersServiceClient, &cleanup, runnersOptions...)
 	terminalProxyClient := mustClient(config.TerminalProxyGRPCTarget, "terminal proxy", terminalproxyv1.NewTerminalProxyServiceClient, &cleanup)
 	filesClient := mustClient(config.FilesGRPCTarget, "files", filesv1.NewFilesServiceClient, &cleanup)
 	agentStateClient := mustClient(config.AgentStateGRPCTarget, "agent state", agentstatev1.NewAgentStateServiceClient, &cleanup)
@@ -336,8 +346,8 @@ func zitiServiceName() string {
 	return defaultZitiServiceName
 }
 
-func mustClient[T any](target, name string, factory func(grpc.ClientConnInterface) T, cleanup *[]func()) T {
-	client, err := grpcclient.New(target, factory)
+func mustClient[T any](target, name string, factory func(grpc.ClientConnInterface) T, cleanup *[]func(), opts ...grpcclient.Option) T {
+	client, err := grpcclient.New(target, factory, opts...)
 	if err != nil {
 		log.Fatalf("failed to create %s gRPC client: %v", name, err)
 	}

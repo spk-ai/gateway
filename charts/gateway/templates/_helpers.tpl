@@ -107,6 +107,24 @@
 {{- $env = append $env (dict "name" "CLUSTER_ADMIN_IDENTITY_ID" "value" $clusterAdminIdentityId) -}}
 {{- end -}}
 
+{{- $runnersToken := default dict .Values.gateway.runnersCallerToken -}}
+{{- if $runnersToken.enabled -}}
+{{- $audience := trimAll " \n\t" (default "" $runnersToken.audience) -}}
+{{- if not $audience -}}
+{{- fail "gateway.runnersCallerToken.audience is required when enabled" -}}
+{{- end -}}
+{{- $expiration := int (default 600 $runnersToken.expirationSeconds) -}}
+{{- if lt $expiration 600 -}}
+{{- fail "gateway.runnersCallerToken.expirationSeconds must be at least 600" -}}
+{{- end -}}
+{{- $mountPath := trimSuffix "/" (default "/var/run/secrets/agyn.io/runners-token" $runnersToken.mountPath) -}}
+{{- $env = append $env (dict "name" "RUNNERS_TOKEN_FILE" "value" (printf "%s/token" $mountPath)) -}}
+{{- $volume := dict "name" "runners-caller-token" "projected" (dict "sources" (list (dict "serviceAccountToken" (dict "audience" $audience "expirationSeconds" $expiration "path" "token")))) -}}
+{{- $mount := dict "name" "runners-caller-token" "mountPath" $mountPath "readOnly" true -}}
+{{- $_ := set .Values "extraVolumes" (append (.Values.extraVolumes | default (list)) $volume) -}}
+{{- $_ := set .Values "extraVolumeMounts" (append (.Values.extraVolumeMounts | default (list)) $mount) -}}
+{{- end -}}
+
 {{- $userEnv := .Values.env | default (list) -}}
 {{- $_ := set .Values "env" (concat $env $userEnv) -}}
 {{- end -}}

@@ -73,11 +73,14 @@ type Config struct {
 	UsersGRPCTarget          string
 	OrganizationsGRPCTarget  string
 	RunnersGRPCTarget        string
-	TerminalProxyGRPCTarget  string
-	ExposeGRPCTarget         string
-	EgressRulesGRPCTarget    string
-	GroupsGRPCTarget         string
-	NetworksGRPCTarget       string
+	// RunnersTokenFile is the projected ServiceAccount token (audience
+	// agyn-runners) attached to Runners calls only. Empty sends none.
+	RunnersTokenFile        string
+	TerminalProxyGRPCTarget string
+	ExposeGRPCTarget        string
+	EgressRulesGRPCTarget   string
+	GroupsGRPCTarget        string
+	NetworksGRPCTarget      string
 }
 
 // LoadConfigFromEnv constructs a Config instance from environment variables.
@@ -174,6 +177,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		UsersGRPCTarget:          envOrDefault("USERS_GRPC_TARGET", defaultUsersGRPCTarget),
 		OrganizationsGRPCTarget:  envOrDefault("ORGANIZATIONS_GRPC_TARGET", defaultOrganizationsGRPCTarget),
 		RunnersGRPCTarget:        envOrDefault("RUNNERS_GRPC_TARGET", defaultRunnersGRPCTarget),
+		RunnersTokenFile:         strings.TrimSpace(os.Getenv("RUNNERS_TOKEN_FILE")),
 		TerminalProxyGRPCTarget:  envOrDefault("TERMINAL_PROXY_GRPC_TARGET", defaultTerminalProxyGRPCTarget),
 		ExposeGRPCTarget:         envOrDefault("EXPOSE_GRPC_TARGET", defaultExposeGRPCTarget),
 		EgressRulesGRPCTarget:    envOrDefault("EGRESS_RULES_GRPC_TARGET", defaultEgressRulesGRPCTarget),
