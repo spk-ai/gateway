@@ -2,7 +2,7 @@ name: E2E
 
 on:
   push:
-    branches: [main]
+    branches: [main, docs/living-contracts]
   pull_request:
   workflow_dispatch:
 
@@ -16,27 +16,73 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout pinned E2E tooling
+        uses: actions/checkout@v4
+        with:
+          repository: agynio/e2e
+          ref: 435b549a937129b6858e7314648eb690894209fe
+          path: .e2e-tooling
+          persist-credentials: false
+
+      - name: Prepare disposable VM image repair
+        run: python3 .github/e2e/prepare.py .e2e-tooling
+
       - name: Provision cluster
-        uses: agynio/e2e/.github/actions/provision-vm@main
+        uses: ./.e2e-tooling/.github/actions/provision-vm
+        with:
+          agyn-cli-version: v0.19.0
 
       - name: Setup DevSpace
-        uses: agynio/e2e/.github/actions/setup-devspace@main
+        uses: agynio/e2e/.github/actions/setup-devspace@435b549a937129b6858e7314648eb690894209fe
 
+      # The disposable VM is Helm-owned; there is no ArgoCD application to pause.
       - name: Deploy gateway from source
+        id: deploy
         run: devspace dev
 
+      # Readiness, not a TCP connect: /readyz is 200 only once a router has
+      # confirmed a Ziti terminator for the gateway service.
+      - name: Wait for gateway Ziti readiness
+        run: |
+          set -euo pipefail
+          kubectl port-forward -n agyn-platform deployment/gateway 18090:8080 >"$RUNNER_TEMP/port-forward.log" 2>&1 &
+          forward=$!
+          trap 'kill "$forward" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 120); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/readyz || true)" = 200 ]; then
+              echo "Gateway reports an established Ziti listener."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::gateway /readyz never returned 200"
+          kubectl logs -n agyn-platform deployment/gateway --all-containers --tail=-1 | grep -E 'ziti|bind|listening' | tail -50 || true
+          exit 1
+
       - name: Run E2E tests
-        uses: agynio/e2e/.github/actions/run-tests@main
+        uses: ./.e2e-tooling/.github/actions/run-tests
         env:
           E2E_SUITES: go-core go-terraform playwright
         with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: gateway
 
-      - name: Restore ArgoCD auto-sync
+      - name: Collect gateway diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -n agyn-platform -l app.kubernetes.io/name=gateway -o wide || true
+          kubectl describe pods -n agyn-platform -l app.kubernetes.io/name=gateway || true
+          kubectl logs -n agyn-platform -l app.kubernetes.io/name=gateway --all-containers --tail=300 || true
+
+      - name: Stop disposable platform VM
         if: always()
-        run: devspace run-pipeline restore-argocd
+        timeout-minutes: 3
+        run: |
+          if command -v agyn >/dev/null 2>&1; then
+            agyn local stop
+          fi
