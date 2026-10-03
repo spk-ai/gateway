@@ -62,6 +62,21 @@
 {{- $env = append $env (dict "name" "OIDC_CLIENT_ID" "value" $oidcClientId) -}}
 {{- end -}}
 
+{{- $oidcAudience := trimAll " \n\t" (default "" .Values.gateway.oidcAudience) -}}
+{{- if $oidcAudience -}}
+{{- $env = append $env (dict "name" "OIDC_AUDIENCE" "value" $oidcAudience) -}}
+{{- end -}}
+
+{{- $oidcCaFile := trimAll " \n\t" (default "" .Values.gateway.oidcCaFile) -}}
+{{- if $oidcCaFile -}}
+{{- $env = append $env (dict "name" "OIDC_CA_FILE" "value" $oidcCaFile) -}}
+{{- end -}}
+
+{{- $oidcDiscoveryTokenFile := trimAll " \n\t" (default "" .Values.gateway.oidcDiscoveryTokenFile) -}}
+{{- if $oidcDiscoveryTokenFile -}}
+{{- $env = append $env (dict "name" "OIDC_DISCOVERY_TOKEN_FILE" "value" $oidcDiscoveryTokenFile) -}}
+{{- end -}}
+
 {{- $oidcProfileSource := trimAll " \n\t" (default "" .Values.gateway.oidcProfileSource) -}}
 {{- if $oidcProfileSource -}}
 {{- $env = append $env (dict "name" "OIDC_PROFILE_SOURCE" "value" $oidcProfileSource) -}}

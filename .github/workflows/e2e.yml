@@ -69,6 +69,20 @@ jobs:
       - name: Verify runners caller token is mounted
         run: kubectl exec -n agyn-platform deployment/gateway -- test -s /var/run/secrets/agyn.io/runners-token/token
 
+      # Live check of OIDC_CA_FILE and OIDC_DISCOVERY_TOKEN_FILE against this
+      # cluster's ServiceAccount issuer, using the pod's own API token and the
+      # projected runners token. Informational: the disposable cluster's issuer
+      # and network are not the production ones, and unit tests gate the PR.
+      - name: Check Kubernetes ServiceAccount issuer discovery (informational)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          kubectl exec -n agyn-platform deployment/gateway -c gateway -- sh -c '
+            cd /opt/app/data &&
+            OIDC_KUBERNETES_SMOKE_TOKEN_FILE=/var/run/secrets/agyn.io/runners-token/token \
+            OIDC_KUBERNETES_SMOKE_AUDIENCE=agyn-runners \
+            go test -count=1 -run "^TestKubernetesServiceAccountIssuer$" -v ./internal/oidcauth'
+
       - name: Run E2E tests
         uses: ./.e2e-tooling/.github/actions/run-tests
         env:

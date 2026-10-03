@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +35,9 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("ZITI_MANAGEMENT_GRPC_TARGET", "ziti-management:50061")
 	t.Setenv("OIDC_ISSUER_URL", "https://issuer.example.com")
 	t.Setenv("OIDC_CLIENT_ID", "client-123")
+	t.Setenv("OIDC_AUDIENCE", " agyn-gateway ")
+	t.Setenv("OIDC_CA_FILE", " /var/run/secrets/kubernetes.io/serviceaccount/ca.crt ")
+	t.Setenv("OIDC_DISCOVERY_TOKEN_FILE", " /var/run/secrets/kubernetes.io/serviceaccount/token ")
 	t.Setenv("CLUSTER_ADMIN_TOKEN", "cluster-token")
 	t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "cluster-identity")
 
@@ -152,6 +156,15 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	if got := cfg.OIDCClientID; got != "client-123" {
 		t.Fatalf("unexpected oidc client id: %s", got)
 	}
+	if got := cfg.OIDCAudience; got != "agyn-gateway" {
+		t.Fatalf("unexpected oidc audience: %s", got)
+	}
+	if got := cfg.OIDCCAFile; got != "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" {
+		t.Fatalf("unexpected oidc ca file: %s", got)
+	}
+	if got := cfg.OIDCDiscoveryTokenFile; got != "/var/run/secrets/kubernetes.io/serviceaccount/token" {
+		t.Fatalf("unexpected oidc discovery token file: %s", got)
+	}
 
 	if got := cfg.ClusterAdminToken; got != "cluster-token" {
 		t.Fatalf("unexpected cluster admin token: %s", got)
@@ -205,6 +218,9 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 	t.Setenv("ZITI_MANAGEMENT_GRPC_TARGET", "")
 	t.Setenv("OIDC_ISSUER_URL", "")
 	t.Setenv("OIDC_CLIENT_ID", "")
+	t.Setenv("OIDC_AUDIENCE", "")
+	t.Setenv("OIDC_CA_FILE", "")
+	t.Setenv("OIDC_DISCOVERY_TOKEN_FILE", "")
 	t.Setenv("CLUSTER_ADMIN_TOKEN", "")
 	t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "")
 
@@ -215,6 +231,9 @@ func TestLoadConfigFromEnvAllDefaults(t *testing.T) {
 
 	if cfg.AgentsGRPCTarget != defaultAgentsGRPCTarget {
 		t.Fatalf("unexpected agents grpc target: %s", cfg.AgentsGRPCTarget)
+	}
+	if cfg.OIDCAudience != "" || cfg.OIDCCAFile != "" || cfg.OIDCDiscoveryTokenFile != "" {
+		t.Fatalf("oidc workload settings must default to empty: %q %q %q", cfg.OIDCAudience, cfg.OIDCCAFile, cfg.OIDCDiscoveryTokenFile)
 	}
 	if cfg.AppsGRPCTarget != defaultAppsGRPCTarget {
 		t.Fatalf("unexpected apps grpc target: %s", cfg.AppsGRPCTarget)
@@ -466,6 +485,49 @@ func TestLoadConfigFromEnvZitiDisabledSkipsTimeoutRelations(t *testing.T) {
 			}
 			if cfg.ZitiEnabled {
 				t.Fatalf("expected ziti to be disabled")
+			}
+		})
+	}
+}
+
+func TestLoadConfigFromEnvOIDCWorkloadValidation(t *testing.T) {
+	tests := []struct {
+		name               string
+		issuer             string
+		audience           string
+		caFile             string
+		discoveryTokenFile string
+		wantErr            string
+	}{
+		{name: "none set"},
+		{name: "issuer only", issuer: "https://issuer.example.com"},
+		{name: "audience only with issuer", issuer: "https://issuer.example.com", audience: "agyn-gateway"},
+		{name: "ca only with issuer", issuer: "https://issuer.example.com", caFile: "/ca.crt"},
+		{name: "kubernetes issuer", issuer: "https://kubernetes.default.svc.cluster.local", audience: "agyn-gateway", caFile: "/ca.crt", discoveryTokenFile: "/token"},
+		{name: "audience without issuer", audience: "agyn-gateway", wantErr: "require OIDC_ISSUER_URL"},
+		{name: "ca without issuer", caFile: "/ca.crt", wantErr: "require OIDC_ISSUER_URL"},
+		{name: "token without issuer", audience: "agyn-gateway", discoveryTokenFile: "/token", wantErr: "require OIDC_ISSUER_URL"},
+		{name: "token without audience", issuer: "https://kubernetes.default.svc.cluster.local", caFile: "/ca.crt", discoveryTokenFile: "/token", wantErr: "OIDC_DISCOVERY_TOKEN_FILE requires OIDC_AUDIENCE"},
+		{name: "blank audience counts as unset", issuer: "https://kubernetes.default.svc.cluster.local", audience: "  ", discoveryTokenFile: "/token", wantErr: "OIDC_DISCOVERY_TOKEN_FILE requires OIDC_AUDIENCE"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CLUSTER_ADMIN_TOKEN", "")
+			t.Setenv("CLUSTER_ADMIN_IDENTITY_ID", "")
+			t.Setenv("OIDC_ISSUER_URL", tt.issuer)
+			t.Setenv("OIDC_AUDIENCE", tt.audience)
+			t.Setenv("OIDC_CA_FILE", tt.caFile)
+			t.Setenv("OIDC_DISCOVERY_TOKEN_FILE", tt.discoveryTokenFile)
+
+			_, err := LoadConfigFromEnv()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 			}
 		})
 	}

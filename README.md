@@ -143,6 +143,47 @@ bind timeout, `ZITI_LEASE_RENEWAL_INTERVAL` and a 30s margin do not fit within
 that lease. The [manager](internal/zitimanager/manager.go) and
 [configuration](internal/platform/config.go) own the details.
 
+## OIDC Workload Identity
+
+Decision (2026-10-03): the A2A service pod authenticates to the Gateway with its
+projected ServiceAccount token (audience `agyn-gateway`) as an OIDC bearer
+token, using the Kubernetes ServiceAccount issuer as the identity provider. An
+unknown subject (`system:serviceaccount:<namespace>:<name>`) is provisioned as a
+new user, as for any OIDC subject. The Gateway accepts a single issuer, so this
+replaces any human IdP on the same deployment.
+
+The deployment repository sets these (chart values in parentheses); the
+[verifier](internal/oidcauth/verifier.go), its
+[discovery client](internal/oidcauth/discovery.go) and the
+[configuration](internal/platform/config.go) own the details:
+
+| Variable | Kubernetes issuer value | Semantics |
+| --- | --- | --- |
+| `OIDC_ISSUER_URL` (`oidcIssuerUrl`) | `https://kubernetes.default.svc.cluster.local` | Must equal the discovery document's `issuer`. |
+| `OIDC_CLIENT_ID` (`oidcClientId`) | `agyn-gateway` | Still required; not used for verification. |
+| `OIDC_AUDIENCE` (`oidcAudience`) | `agyn-gateway` | Token `aud` must contain it, otherwise rejected. |
+| `OIDC_CA_FILE` (`oidcCaFile`) | `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt` | PEM bundle added to the system roots for discovery and JWKS requests only. |
+| `OIDC_DISCOVERY_TOKEN_FILE` (`oidcDiscoveryTokenFile`) | `/var/run/secrets/kubernetes.io/serviceaccount/token` | Sent as `Authorization: Bearer` on discovery and JWKS requests to the issuer and `jwks_uri` origins only; re-read on every fetch. |
+| `OIDC_PROFILE_SOURCE` (`oidcProfileSource`) | `token` | The Kubernetes issuer has no UserInfo endpoint. |
+
+Security boundary:
+- Without `OIDC_AUDIENCE` any token the issuer signs is accepted (the earlier
+  behavior, kept for existing IdPs, and logged as a warning at startup). With
+  the Kubernetes issuer that would admit every pod's default API token, so
+  `OIDC_DISCOVERY_TOKEN_FILE` refuses to start without it.
+- Every token needs `exp`; verification is offline against the JWKS, so a
+  deleted pod's bound token stays valid until it expires. Keep the projected
+  token's `expirationSeconds` short.
+- Any principal that can create a pod or a ServiceAccount token with audience
+  `agyn-gateway` in any namespace can become an Agyn user. Restrict pod
+  creation and `serviceaccounts/token` accordingly.
+- The discovery token is the Gateway's own API credential. It is sent only to
+  https origins (scheme, host and port) named by `OIDC_ISSUER_URL` and the
+  discovered `jwks_uri`, never on a redirect to another origin, and never
+  logged. Startup fails if the CA or token file is unusable.
+- The Kubernetes `jwks_uri` is the API server's external endpoint, so the
+  Gateway pod needs egress to it as well as to the in-cluster issuer.
+
 ## Adding a New API Domain
 
 Define public domains in `agynio/api` protobuf and coordinate schema publication
