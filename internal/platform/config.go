@@ -63,6 +63,9 @@ type Config struct {
 	ZitiManagementGRPCTarget string
 	OIDCIssuerURL            string
 	OIDCClientID             string
+	OIDCAudience             string
+	OIDCCAFile               string
+	OIDCDiscoveryTokenFile   string
 	OIDCProfileSource        string
 	OIDCClaimName            string
 	OIDCClaimEmail           string
@@ -139,6 +142,14 @@ func LoadConfigFromEnv() (*Config, error) {
 		return nil, fmt.Errorf("OIDC_PROFILE_SOURCE must be either \"userinfo\" or \"token\"")
 	}
 
+	oidcIssuerURL := strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL"))
+	oidcAudience := strings.TrimSpace(os.Getenv("OIDC_AUDIENCE"))
+	oidcCAFile := strings.TrimSpace(os.Getenv("OIDC_CA_FILE"))
+	oidcDiscoveryTokenFile := strings.TrimSpace(os.Getenv("OIDC_DISCOVERY_TOKEN_FILE"))
+	if err := validateOIDCWorkloadSettings(oidcIssuerURL, oidcAudience, oidcCAFile, oidcDiscoveryTokenFile); err != nil {
+		return nil, err
+	}
+
 	clusterAdminToken := strings.TrimSpace(os.Getenv("CLUSTER_ADMIN_TOKEN"))
 	clusterAdminIdentityID := strings.TrimSpace(os.Getenv("CLUSTER_ADMIN_IDENTITY_ID"))
 	if (clusterAdminToken == "") != (clusterAdminIdentityID == "") {
@@ -165,8 +176,11 @@ func LoadConfigFromEnv() (*Config, error) {
 		ZitiBindTimeout:          zitiBindTimeout,
 		ZitiIdentityLeaseTTL:     zitiIdentityLeaseTTL,
 		ZitiManagementGRPCTarget: envOrDefault("ZITI_MANAGEMENT_GRPC_TARGET", defaultZitiManagementGRPCTarget),
-		OIDCIssuerURL:            strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
+		OIDCIssuerURL:            oidcIssuerURL,
 		OIDCClientID:             strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
+		OIDCAudience:             oidcAudience,
+		OIDCCAFile:               oidcCAFile,
+		OIDCDiscoveryTokenFile:   oidcDiscoveryTokenFile,
 		OIDCProfileSource:        oidcProfileSource,
 		OIDCClaimName:            strings.TrimSpace(os.Getenv("OIDC_CLAIM_NAME")),
 		OIDCClaimEmail:           strings.TrimSpace(os.Getenv("OIDC_CLAIM_EMAIL")),
@@ -184,6 +198,23 @@ func LoadConfigFromEnv() (*Config, error) {
 		GroupsGRPCTarget:         envOrDefault("GROUPS_GRPC_TARGET", defaultGroupsGRPCTarget),
 		NetworksGRPCTarget:       envOrDefault("NETWORKS_GRPC_TARGET", defaultNetworksGRPCTarget),
 	}, nil
+}
+
+// validateOIDCWorkloadSettings rejects settings that would silently do
+// nothing or weaken authentication. Without an issuer the OIDC settings have no
+// effect. A discovery token is only needed by issuers such as the Kubernetes
+// API server whose signing keys every ServiceAccount token shares; without an
+// audience such a gateway would accept every ServiceAccount token in the
+// cluster, including each pod's default API token. File contents are checked
+// when the verifier is built (see oidcauth.NewVerifier).
+func validateOIDCWorkloadSettings(issuerURL, audience, caFile, discoveryTokenFile string) error {
+	if issuerURL == "" && (audience != "" || caFile != "" || discoveryTokenFile != "") {
+		return fmt.Errorf("OIDC_AUDIENCE, OIDC_CA_FILE and OIDC_DISCOVERY_TOKEN_FILE require OIDC_ISSUER_URL")
+	}
+	if discoveryTokenFile != "" && audience == "" {
+		return fmt.Errorf("OIDC_DISCOVERY_TOKEN_FILE requires OIDC_AUDIENCE")
+	}
+	return nil
 }
 
 // zitiLeaseSafetyMargin covers the extension calls themselves (the manager

@@ -179,6 +179,23 @@ gateway:
   networksGrpcTarget: "networks:50051"
   oidcIssuerUrl: ""
   oidcClientId: ""
+  # Workload identity with the Kubernetes ServiceAccount issuer. The deployment
+  # repository sets these; the chart only passes them through, and the gateway
+  # validates them at startup (see internal/oidcauth and README).
+  #
+  # OIDC_AUDIENCE: every OIDC bearer token's `aud` must contain this value.
+  # Empty accepts any audience the issuer signs; with the Kubernetes issuer
+  # that would admit every ServiceAccount token in the cluster.
+  oidcAudience: ""
+  # OIDC_CA_FILE: PEM bundle trusted, in addition to the system roots, for
+  # OIDC discovery and JWKS requests only, e.g.
+  # /var/run/secrets/kubernetes.io/serviceaccount/ca.crt.
+  oidcCaFile: ""
+  # OIDC_DISCOVERY_TOKEN_FILE: file sent as `Authorization: Bearer` on OIDC
+  # discovery and JWKS requests to the https issuer and jwks_uri origins only,
+  # re-read on every fetch, e.g. /var/run/secrets/kubernetes.io/serviceaccount/token
+  # (requires automountServiceAccountToken). Requires oidcAudience.
+  oidcDiscoveryTokenFile: ""
   # Where provisioning-time profile claims come from: "userinfo" (default) or
   # "token". Use "token" with IdPs that issue audience-restricted access tokens,
   # which the OIDC UserInfo endpoint rejects.

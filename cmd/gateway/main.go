@@ -101,7 +101,14 @@ func main() {
 		if config.OIDCIssuerURL == "" || config.OIDCClientID == "" {
 			log.Fatalf("both OIDC issuer URL and client ID are required when OIDC is enabled")
 		}
-		verifier, err := oidcauth.NewVerifier(ctx, config.OIDCIssuerURL, config.OIDCClientID)
+		if config.OIDCAudience == "" {
+			log.Printf("warning: OIDC_AUDIENCE is unset; any token signed by %s is accepted regardless of audience", config.OIDCIssuerURL)
+		}
+		verifier, err := oidcauth.NewVerifier(ctx, config.OIDCIssuerURL, config.OIDCClientID,
+			oidcauth.WithAudience(config.OIDCAudience),
+			oidcauth.WithCAFile(config.OIDCCAFile),
+			oidcauth.WithDiscoveryTokenFile(config.OIDCDiscoveryTokenFile),
+		)
 		if err != nil {
 			log.Fatalf("failed to create OIDC verifier: %v", err)
 		}
