@@ -490,7 +490,7 @@ func TestOriginOf(t *testing.T) {
 	}{
 		{raw: "https://kubernetes.default.svc.cluster.local", want: "https://kubernetes.default.svc.cluster.local:443", ok: true},
 		{raw: "https://Kubernetes.Default.svc.cluster.local:443/openid", want: "https://kubernetes.default.svc.cluster.local:443", ok: true},
-		{raw: "https://95.216.29.229:6443/openid/v1/jwks", want: "https://95.216.29.229:6443", ok: true},
+		{raw: "https://198.51.100.7:6443/openid/v1/jwks", want: "https://198.51.100.7:6443", ok: true},
 		{raw: "HTTPS://[::1]/x", want: "https://[::1]:443", ok: true},
 		{raw: "http://issuer.example.com", want: "http://issuer.example.com:80", ok: true},
 		{raw: "ftp://issuer.example.com", ok: false},
